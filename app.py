@@ -224,6 +224,40 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
         
     return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
 
+# Helper to fetch active users directly from Databricks Unity Catalog SQL table
+def fetch_users_from_databricks(catalog, schema, table, warehouse_id):
+    if not db_client or not warehouse_id:
+        return None
+    try:
+        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
+        # Execute statement on SQL Warehouse using statement execution service
+        res = db_client.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=sql
+        )
+        
+        # Extract schema fields and rows
+        rows = res.result.data_array
+        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
+        
+        users_map = {}
+        for row in rows:
+            record = dict(zip(schema_fields, row))
+            uid = record.get("user_id")
+            if uid:
+                users_map[uid] = {
+                    "role": record.get("role", "").lower().strip(),
+                    "name": record.get("username", f"User {uid}"),
+                    "id": uid,
+                    "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
+                    "email": record.get("email", ""),
+                    "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
+                }
+        return users_map
+    except Exception as e:
+        st.sidebar.error(f"SQL Error: {str(e)}")
+        return None
+
 # Initialize Session State for audit logs and settings
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -236,15 +270,19 @@ if "authenticated" not in st.session_state:
 if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
 
-USERS_BY_ID = {
-    "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
-    "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
-    "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
-    "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
-    "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
-    "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
-    "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
-}
+if "users_directory" not in st.session_state:
+    # Hardcoded default fallback map
+    st.session_state.users_directory = {
+        "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
+        "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
+        "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
+        "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
+        "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
+        "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
+        "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
+    }
+
+USERS_BY_ID = st.session_state.users_directory
 
 # Check Databricks App Headers for automatic user logins (SSO)
 headers_email = get_request_header("X-Forwarded-Email")
@@ -432,6 +470,30 @@ if db_host and db_token:
         st.sidebar.success("🟢 Connected (Workspace client)")
 else:
     st.sidebar.warning("⚠️ Local Simulation Mode Active (No Databricks endpoint credentials)")
+
+# Unity Catalog Table Sync Configuration
+with st.sidebar.expander("🗄️ Databricks Table Sync"):
+    sync_catalog = st.text_input("Catalog", value="main")
+    sync_schema = st.text_input("Schema", value="default")
+    sync_table = st.text_input("Table", value="users")
+    sync_warehouse = st.text_input("SQL Warehouse ID", placeholder="e.g. 1a2b3c4d5e6f7g8h", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
+    
+    if st.button("Sync Users Table", use_container_width=True):
+        if not db_host or not db_token:
+            st.error("Please configure Databricks authentication details to sync.")
+        elif not sync_warehouse:
+            st.error("Please enter a SQL Warehouse ID.")
+        else:
+            with st.spinner("Fetching user table from Unity Catalog..."):
+                fetched_users = fetch_users_from_databricks(
+                    sync_catalog, sync_schema, sync_table, sync_warehouse
+                )
+                if fetched_users:
+                    st.session_state.users_directory = fetched_users
+                    st.success(f"Successfully synced {len(fetched_users)} users!")
+                    st.rerun()
+                else:
+                    st.error("Failed to sync users table from Databricks SQL.")
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
 col1, col2 = st.columns([2, 1])
