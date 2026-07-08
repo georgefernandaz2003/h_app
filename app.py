@@ -113,15 +113,23 @@ def log_audit_request(user_id, role, query, status, details=""):
     st.session_state.audit_logs.insert(0, log_entry)
 
 # Databricks Auth Helper
-@st.cache_resource
-def get_db_client():
+@st.cache_resource(show_spinner=False)
+def get_db_client(host=None, token=None):
     try:
+        if host and token:
+            # Strip scheme from host overrides as WorkspaceClient expects a clean hostname/domain
+            clean_host = host.strip()
+            if clean_host.startswith("https://"):
+                clean_host = clean_host[8:]
+            elif clean_host.startswith("http://"):
+                clean_host = clean_host[7:]
+            return WorkspaceClient(host=clean_host, token=token.strip())
         # Automatically detects credentials when running inside Databricks Apps or via local .databrickscfg
         return WorkspaceClient()
     except Exception as e:
         return None
 
-db_client = get_db_client()
+default_client = get_db_client()
 
 # Helper to retrieve headers in Streamlit (with fallback for older versions)
 def get_request_header(header_name):
@@ -219,12 +227,13 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
     return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
 
 # Helper to fetch active users directly from Databricks Unity Catalog SQL table
-def fetch_users_from_databricks(catalog, schema, table, warehouse_id):
-    if not db_client or not warehouse_id:
+def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, token):
+    client = get_db_client(host, token)
+    if not client or not warehouse_id:
         return None
     try:
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
-        res = db_client.statement_execution.execute_statement(
+        res = client.statement_execution.execute_statement(
             warehouse_id=warehouse_id,
             statement=sql
         )
@@ -262,8 +271,11 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         return False, "Databricks connection details (host, token, or SQL Warehouse ID) are not configured. Direct database check is required.", ""
             
     try:
+        client = get_db_client(host, token)
+        if not client:
+            return False, "Failed to initialize Databricks Workspace client.", ""
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{login_id.strip()}'"
-        res = db_client.statement_execution.execute_statement(
+        res = client.statement_execution.execute_statement(
             warehouse_id=warehouse_id,
             statement=sql
         )
@@ -319,11 +331,11 @@ with st.sidebar.expander("🔑 Manual Token Override"):
     host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
     token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
 
-db_host = host_override if host_override else (db_client.config.host if db_client else os.environ.get("DATABRICKS_HOST", ""))
+db_host = host_override if host_override else (default_client.config.host if default_client else os.environ.get("DATABRICKS_HOST", ""))
 db_token = (
     token_override if token_override
     else (get_request_header("x-forwarded-access-token") if get_request_header("x-forwarded-access-token")
-          else (db_client.config.token if db_client else os.environ.get("DATABRICKS_TOKEN", "")))
+          else (default_client.config.token if default_client else os.environ.get("DATABRICKS_TOKEN", "")))
 )
 
 if db_host and not db_host.startswith(("http://", "https://")):
@@ -341,7 +353,7 @@ with st.sidebar.expander("🗄️ Databricks Table Sync"):
             st.error("Please enter a SQL Warehouse ID.")
         else:
             with st.spinner("Fetching user table..."):
-                fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse)
+                fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
                 if fetched_users:
                     st.session_state.users_directory = fetched_users
                     st.success(f"Successfully synced {len(fetched_users)} users!")
