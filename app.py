@@ -218,10 +218,8 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
         if "diagnosis" in query_lower or "history" in query_lower:
             return f"❌ **Access Denied (Lab Technician Policy)**: Lab technicians are restricted from viewing clinical histories, diagnoses, or consult notes. You are only authorized to view raw laboratory results."
         return f"🔬 **Lab Report Portal (Lab Tech 1)**:\n\nShowing lab results for Patient `PA001`:\n- **Complete Blood Count (CBC)**: Normal range.\n- **Lipid Panel**: Cholesterol 180 mg/dL (Normal)."
-        
     elif role == "admin":
         return f"⚡ **Administrator Portal (jeevanmg958)**:\n\nFull database access granted. Active Policy Rules:\n- Row-Level Security: Bypass active.\n- Audit logs active.\n\nAll records retrieved across all patients."
-        
     return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
 
 # Helper to fetch active users directly from Databricks Unity Catalog SQL table
@@ -230,16 +228,12 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id):
         return None
     try:
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
-        # Execute statement on SQL Warehouse using statement execution service
         res = db_client.statement_execution.execute_statement(
             warehouse_id=warehouse_id,
             statement=sql
         )
-        
-        # Extract schema fields and rows
         rows = res.result.data_array
         schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
-        
         users_map = {}
         for row in rows:
             record = dict(zip(schema_fields, row))
@@ -258,29 +252,165 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id):
         st.sidebar.error(f"SQL Error: {str(e)}")
         return None
 
-# Initialize Session State for audit logs and settings
+# Local fallback mock data for testing on localhost
+LOCAL_MOCK_USERS = {
+    "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
+    "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
+    "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
+    "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
+    "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
+    "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
+    "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
+}
+
+# Credentials & Role Validation Function (direct query to Databricks UC)
+def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
+    use_mock = not host or not token or not warehouse_id
+    if use_mock:
+        clean_id = login_id.strip()
+        if clean_id in LOCAL_MOCK_USERS:
+            user_info = LOCAL_MOCK_USERS[clean_id]
+            if user_info["role"] == login_role:
+                return True, user_info, "Local Simulation Profile"
+            else:
+                return False, f"Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.", ""
+        else:
+            return False, f"Invalid User ID: `{clean_id}` does not exist in local simulation database.", ""
+            
+    try:
+        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{login_id.strip()}'"
+        res = db_client.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=sql
+        )
+        if not res.result.data_array or len(res.result.data_array) == 0:
+            return False, f"User ID `{login_id}` not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
+            
+        row = res.result.data_array[0]
+        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
+        record = dict(zip(schema_fields, row))
+        db_role = record.get("role", "").lower().strip()
+        if db_role != login_role:
+            return False, f"Role mismatch: User `{login_id}` is registered in Databricks as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
+            
+        user_info = {
+            "role": db_role,
+            "name": record.get("username", f"User {login_id}"),
+            "id": login_id,
+            "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
+            "email": record.get("email", ""),
+            "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
+        }
+        return True, user_info, "Databricks Unity Catalog"
+    except Exception as e:
+        return False, f"Databricks SQL Validation failed: {str(e)}", ""
+
+# Initialize Session State
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
-    # Add an initial log
     log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
-
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
-
 if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
-
 if "users_directory" not in st.session_state:
-    # Initialize empty directory. Must be populated from Databricks Unity Catalog SQL table.
     st.session_state.users_directory = {}
 
-USERS_BY_ID = st.session_state.users_directory
-
-# Check Databricks App Headers for automatic user logins (SSO)
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
 
-# Automatic auto-login is disabled. Users can sign in via the SSO tab or Manual tab.
+# ================= SIDEBAR: AUTHENTICATION & SETTINGS =================
+st.sidebar.markdown("### ⚙️ Gateway Settings")
+endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-871d1c5e-endpoint")
+
+with st.sidebar.expander("🔑 Manual Token Override"):
+    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
+    token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
+
+db_host = host_override if host_override else (db_client.config.host if db_client else os.environ.get("DATABRICKS_HOST", ""))
+db_token = (
+    token_override if token_override
+    else (get_request_header("x-forwarded-access-token") if get_request_header("x-forwarded-access-token")
+          else (db_client.config.token if db_client else os.environ.get("DATABRICKS_TOKEN", "")))
+)
+
+if db_host and not db_host.startswith(("http://", "https://")):
+    db_host = f"https://{db_host}"
+
+with st.sidebar.expander("🗄️ Databricks Table Sync"):
+    sync_catalog = st.text_input("Catalog", value="aienterprise")
+    sync_schema = st.text_input("Schema", value="default")
+    sync_table = st.text_input("Table", value="users")
+    sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
+    if st.button("Sync Users Table", use_container_width=True):
+        if not db_host or not db_token:
+            st.error("Please configure Databricks authentication details to sync.")
+        elif not sync_warehouse:
+            st.error("Please enter a SQL Warehouse ID.")
+        else:
+            with st.spinner("Fetching user table..."):
+                fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse)
+                if fetched_users:
+                    st.session_state.users_directory = fetched_users
+                    st.success(f"Successfully synced {len(fetched_users)} users!")
+                    st.rerun()
+                else:
+                    st.error("Failed to sync users table from Databricks SQL.")
+
+USERS_BY_ID = st.session_state.users_directory
+
+if st.session_state.authenticated:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔐 Authenticated Identity")
+    role = st.session_state.user_role
+    user_id = st.session_state.user_id
+    
+    role_badges = {
+        "patient": '<span class="badge badge-patient">Patient</span>',
+        "doctor": '<span class="badge badge-doctor">Doctor</span>',
+        "pharmacist": '<span class="badge badge-pharmacist">Pharmacist</span>',
+        "labtechnician": '<span class="badge badge-labtechnician">Lab Technician</span>',
+        "admin": '<span class="badge badge-admin">Administrator</span>'
+    }
+    
+    st.sidebar.markdown(f"**Role:** {role_badges.get(role, role)}", unsafe_allow_html=True)
+    st.sidebar.markdown(f"**User ID:** `{user_id}`")
+    
+    if st.sidebar.button("🚪 Log Out", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.user_id = None
+        st.session_state.user_role = None
+        st.session_state.logged_out = True
+        st.rerun()
+    if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🛡️ Active Session Context")
+    patient_id = ""
+    doctor_id = ""
+    if role == "patient":
+        patient_id = user_id
+        st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
+    elif role == "doctor":
+        doctor_id = user_id
+        st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
+        mapping_df = pd.DataFrame({"Doctor ID": ["D001", "D002"], "Assigned Patient ID": ["PA001", "PA002"]})
+        st.sidebar.table(mapping_df)
+        assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
+        if assigned:
+            patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
+            st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
+    elif role == "pharmacist":
+        st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
+        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
+    elif role == "labtechnician":
+        st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
+        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
+    elif role == "admin":
+        st.sidebar.warning("⚡ Admin has unrestricted access.")
+        patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0)
+        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0)
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
@@ -292,60 +422,37 @@ if not st.session_state.authenticated:
     <div class="status-card" style="max-width: 500px; margin: 2rem auto; border-radius: 16px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px);">
         <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
     """, unsafe_allow_html=True)
-    
     login_tab1, login_tab2 = st.tabs(["👤 Select Identity", "🌐 Databricks SSO"])
-    
     with login_tab1:
-        if not USERS_BY_ID:
-            st.warning("⚠️ No user profiles loaded in local directory.")
-            st.info("💡 Please configure your credentials and warehouse details, then click **Sync Users Table** in the sidebar settings to load the directory from Unity Catalog.")
-        else:
-            login_role = st.selectbox(
-                "Select Your Role",
-                ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
-                format_func=lambda x: x.upper()
-            )
-            
-            # User ID text input for user control
-            default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
-            login_id = st.text_input("Enter Your User ID", value=default_id_val)
-            
-            st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-            
-            if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
-                clean_id = login_id.strip()
-                
-                # Validate credentials against the backend user database
-                if clean_id in USERS_BY_ID:
-                    user_info = USERS_BY_ID[clean_id]
-                    # Check if selected role matches database role
-                    if user_info["role"] == login_role:
-                        st.session_state.authenticated = True
-                        st.session_state.user_role = login_role
-                        st.session_state.user_id = clean_id
-                        st.session_state.user_info = user_info
-                        st.session_state.auth_source = "Local Credentials"
-                        st.session_state.logged_out = False
-                        log_audit_request(clean_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {clean_id}")
-                        st.success("Successfully logged in!")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.")
-                        log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_ROLE_MISMATCH", f"Tried to sign in as {login_role.upper()}")
+        login_role = st.selectbox("Select Your Role", ["patient", "doctor", "pharmacist", "labtechnician", "admin"], format_func=lambda x: x.upper())
+        default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
+        login_id = st.text_input("Enter Your User ID", value=default_id_val)
+        if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
+            with st.spinner("Validating credentials..."):
+                success, result, source = validate_credentials(login_role, login_id, sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+                if success:
+                    st.session_state.authenticated = True
+                    st.session_state.user_role = login_role
+                    st.session_state.user_id = login_id.strip()
+                    st.session_state.user_info = result
+                    st.session_state.auth_source = source
+                    st.session_state.logged_out = False
+                    log_audit_request(login_id.strip(), login_role, "User Sign-In", "SUCCESS", f"Authenticated via {source}")
+                    st.success(f"Successfully logged in via {source}!")
+                    st.rerun()
                 else:
-                    st.error("❌ Invalid User ID: The entered ID does not exist in the portal database.")
-                    log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_INVALID_ID", "ID not found in database.")
-            
+                    st.error(f"❌ Login Failed: {result}")
+                    log_audit_request(login_id.strip(), login_role, "User Sign-In", "FAILED", result)
     with login_tab2:
         if headers_email or headers_user:
             st.write(f"Detected SSO User: **{headers_email or headers_user}**")
             email_key = (headers_email or headers_user).lower().strip()
             matched_user = None
-            for u in USERS_BY_ID.values():
+            scan_users = USERS_BY_ID if USERS_BY_ID else LOCAL_MOCK_USERS
+            for u in scan_users.values():
                 if u["email"].lower() == email_key:
                     matched_user = u
                     break
-            
             if matched_user:
                 st.write(f"Mapped Profile: **{matched_user['name']}** ({matched_user['role'].upper()})")
                 if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
@@ -359,137 +466,11 @@ if not st.session_state.authenticated:
                     st.success("SSO Sign-in Successful!")
                     st.rerun()
             else:
-                st.warning("Your SSO email is not mapped in the portal directory database. Please sign in manually via the Select Identity tab.")
+                st.warning("Your SSO email is not mapped in the portal directory. Please sign in manually.")
         else:
-            st.info("No SSO headers detected from Databricks Gateway. Please sign in manually via the Select Identity tab.")
-        
+            st.info("No SSO headers detected. Please sign in manually via the Select Identity tab.")
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
-
-# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT =================
-st.sidebar.markdown("### 🔐 Authenticated Identity")
-role = st.session_state.user_role
-user_id = st.session_state.user_id
-
-role_badges = {
-    "patient": '<span class="badge badge-patient">Patient</span>',
-    "doctor": '<span class="badge badge-doctor">Doctor</span>',
-    "pharmacist": '<span class="badge badge-pharmacist">Pharmacist</span>',
-    "labtechnician": '<span class="badge badge-labtechnician">Lab Technician</span>',
-    "admin": '<span class="badge badge-admin">Administrator</span>'
-}
-
-st.sidebar.markdown(f"**Role:** {role_badges[role]}", unsafe_allow_html=True)
-st.sidebar.markdown(f"**User ID:** `{user_id}`")
-
-if st.sidebar.button("🚪 Log Out", use_container_width=True):
-    st.session_state.authenticated = False
-    st.session_state.user_id = None
-    st.session_state.user_role = None
-    st.session_state.logged_out = True
-    st.rerun()
-
-if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
-    st.session_state.chat_history = []
-    st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛡️ Active Session Context")
-
-patient_id = ""
-doctor_id = ""
-
-if role == "patient":
-    patient_id = user_id
-    st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
-elif role == "doctor":
-    doctor_id = user_id
-    
-    st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
-    mapping_df = pd.DataFrame({
-        "Doctor ID": ["D001", "D002"],
-        "Assigned Patient ID": ["PA001", "PA002"]
-    })
-    st.sidebar.table(mapping_df)
-    
-    assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
-    if assigned:
-        patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
-        st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
-    else:
-        patient_id = ""
-elif role == "pharmacist":
-    st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
-    patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
-elif role == "labtechnician":
-    st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
-    patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
-elif role == "admin":
-    st.sidebar.warning("⚡ Admin has unrestricted access.")
-    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0)
-    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0)
-
-# Sidebar Endpoint Configuration
-st.sidebar.markdown("---")
-st.sidebar.markdown("### ⚙️ Endpoint Settings")
-
-# Default endpoint name from your serving endpoint screenshot
-endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-871d1c5e-endpoint")
-
-# If client is not authenticated automatically, allow manual token setup
-with st.sidebar.expander("🔑 Manual Token Override"):
-    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
-    token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
-
-# Determine credentials to use
-headers_token = get_request_header("x-forwarded-access-token")
-
-db_host = host_override if host_override else (db_client.config.host if db_client else os.environ.get("DATABRICKS_HOST", ""))
-db_token = (
-    token_override if token_override
-    else (headers_token if headers_token
-          else (db_client.config.token if db_client else os.environ.get("DATABRICKS_TOKEN", "")))
-)
-
-if db_host and not db_host.startswith(("http://", "https://")):
-    db_host = f"https://{db_host}"
-
-# Connection Status Indicator
-if db_host and db_token:
-    if token_override:
-        st.sidebar.success("🟢 Connected (Token Override)")
-    elif headers_token:
-        st.sidebar.success("🟢 Connected (SSO Header)")
-    elif os.environ.get("DATABRICKS_TOKEN"):
-        st.sidebar.success("🟢 Connected (App Environment)")
-    else:
-        st.sidebar.success("🟢 Connected (Workspace client)")
-else:
-    st.sidebar.warning("⚠️ Local Simulation Mode Active (No Databricks endpoint credentials)")
-
-# Unity Catalog Table Sync Configuration
-with st.sidebar.expander("🗄️ Databricks Table Sync"):
-    sync_catalog = st.text_input("Catalog", value="aienterprise")
-    sync_schema = st.text_input("Schema", value="default")
-    sync_table = st.text_input("Table", value="users")
-    sync_warehouse = st.text_input("SQL Warehouse ID", placeholder="e.g. 1a2b3c4d5e6f7g8h", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
-    
-    if st.button("Sync Users Table", use_container_width=True):
-        if not db_host or not db_token:
-            st.error("Please configure Databricks authentication details to sync.")
-        elif not sync_warehouse:
-            st.error("Please enter a SQL Warehouse ID.")
-        else:
-            with st.spinner("Fetching user table from Unity Catalog..."):
-                fetched_users = fetch_users_from_databricks(
-                    sync_catalog, sync_schema, sync_table, sync_warehouse
-                )
-                if fetched_users:
-                    st.session_state.users_directory = fetched_users
-                    st.success(f"Successfully synced {len(fetched_users)} users!")
-                    st.rerun()
-                else:
-                    st.error("Failed to sync users table from Databricks SQL.")
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
 col1, col2 = st.columns([2, 1])
