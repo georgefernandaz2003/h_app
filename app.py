@@ -327,7 +327,7 @@ with col1:
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
                 # Prepare context and payload
                 payload = {
-                    "messages": [
+                    "input": [
                         {"role": "user", "content": query}
                     ],
                     "user_id": user_id,
