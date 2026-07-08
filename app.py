@@ -237,15 +237,21 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, toke
             warehouse_id=warehouse_id,
             statement=sql
         )
-        # Check statement status to handle FAILED/PENDING safely
+        # Poll statement status until query finishes execution (e.g. cold-warehouse start)
+        statement_id = res.statement_id
         state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        while state in ["PENDING", "RUNNING"]:
+            time.sleep(2)
+            res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+            
         if state == "FAILED":
             error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
             raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
         if not res.result:
             raise ValueError(f"No result returned. Statement state: {state}")
             
-        rows = res.result.data_array
+        rows = res.result.data_array or []
         schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
         users_map = {}
         for row in rows:
@@ -279,18 +285,25 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
             warehouse_id=warehouse_id,
             statement=sql
         )
-        # Check statement status to handle FAILED/PENDING safely
+        # Poll statement status until query finishes execution (e.g. cold-warehouse start)
+        statement_id = res.statement_id
         state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        while state in ["PENDING", "RUNNING"]:
+            time.sleep(2)
+            res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+            
         if state == "FAILED":
             error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
             raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
         if not res.result:
             raise ValueError(f"No result returned. Statement state: {state}")
             
-        if not res.result.data_array or len(res.result.data_array) == 0:
+        rows = res.result.data_array or []
+        if len(rows) == 0:
             return False, f"User ID `{login_id}` not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
             
-        row = res.result.data_array[0]
+        row = rows[0]
         schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
         record = dict(zip(schema_fields, row))
         db_role = record.get("role", "").lower().strip()
