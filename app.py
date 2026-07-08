@@ -228,42 +228,46 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 # Helper to fetch active users directly from Databricks Unity Catalog SQL table
 def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, token):
+    if not host or not token:
+        raise ValueError("Databricks connection details (host or token) are missing.")
+    if not warehouse_id:
+        raise ValueError("SQL Warehouse ID is not configured.")
     client = get_db_client(host, token)
-    if not client or not warehouse_id:
-        return None
-    try:
-        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
-        res = client.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
-            statement=sql
-        )
-        # Poll statement status until query finishes execution (e.g. cold-warehouse start)
-        statement_id = res.statement_id
+    if not client:
+        raise ValueError("Failed to initialize Databricks WorkspaceClient. Verify your host and token overrides.")
+        
+    sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
+    res = client.statement_execution.execute_statement(
+        warehouse_id=warehouse_id,
+        statement=sql
+    )
+    # Poll statement status until query finishes execution (e.g. cold-warehouse start)
+    statement_id = res.statement_id
+    state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+    while state in ["PENDING", "RUNNING"]:
+        time.sleep(2)
+        res = client.statement_execution.get_statement(statement_id=statement_id)
         state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        while state in ["PENDING", "RUNNING"]:
-            time.sleep(2)
-            res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-            
-        if state == "FAILED":
-            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
-            raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
-        if not res.result:
-            raise ValueError(f"No result returned. Statement state: {state}")
-            
-        rows = res.result.data_array or []
-        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
-        users_map = {}
-        for row in rows:
-            record = dict(zip(schema_fields, row))
-            uid = record.get("user_id")
-            if uid:
-                users_map[uid] = {
-                    "role": record.get("role", "").lower().strip(),
-                    "name": record.get("username", f"User {uid}"),
-                    "id": uid,
-                    "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
-                    "email": record.get("email", ""),
+        
+    if state == "FAILED":
+        error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
+        raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
+    if not res.result:
+        raise ValueError(f"No result returned. Statement state: {state}")
+        
+    rows = res.result.data_array or []
+    schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
+    users_map = {}
+    for row in rows:
+        record = dict(zip(schema_fields, row))
+        uid = record.get("user_id")
+        if uid:
+            users_map[uid] = {
+                "role": record.get("role", "").lower().strip(),
+                "name": record.get("username", f"User {uid}"),
+                "id": uid,
+                "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
+                "email": record.get("email", ""),
                     "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
                 }
         return users_map
@@ -366,13 +370,16 @@ with st.sidebar.expander("🗄️ Databricks Table Sync"):
             st.error("Please enter a SQL Warehouse ID.")
         else:
             with st.spinner("Fetching user table..."):
-                fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
-                if fetched_users:
-                    st.session_state.users_directory = fetched_users
-                    st.success(f"Successfully synced {len(fetched_users)} users!")
-                    st.rerun()
-                else:
-                    st.error("Failed to sync users table from Databricks SQL.")
+                try:
+                    fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+                    if fetched_users:
+                        st.session_state.users_directory = fetched_users
+                        st.success(f"Successfully synced {len(fetched_users)} users!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to sync users table: Returned directory is empty.")
+                except Exception as e:
+                    st.error(f"Failed to sync users table: {str(e)}")
 
 USERS_BY_ID = st.session_state.users_directory
 
