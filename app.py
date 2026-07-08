@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 import pandas as pd
 import requests
 import json
@@ -190,6 +191,39 @@ def extract_agent_response_text(predictions):
     except Exception:
         return str(predictions)
 
+# Local Simulation Agent Response Generator (for localhost testing without Databricks Token)
+def get_mock_agent_response(query, role, patient_id, doctor_id):
+    query_lower = query.lower()
+    
+    # Check roles and target IDs for RBAC simulation
+    if role == "patient":
+        if patient_id and ("pa002" in query_lower or "p002" in query_lower):
+            return f"❌ **Access Denied (RBAC Policy violation)**: As a Patient (`{patient_id}`), you are only authorized to access your own records. Access to records of patient `PA002` is denied and has been reported to security audit compliance."
+        return f"📋 **Patient Record Details (PA001)**:\n\n- **Name**: Patient 001\n- **Date of Birth**: 1990-05-15\n- **Primary Care Physician**: Dr. Smith (D001)\n- **Medical History**: Diagnosed with Asthma (2021), Allergy to Penicillin."
+        
+    elif role == "doctor":
+        if doctor_id == "D001":
+            if "pa002" in query_lower:
+                return f"❌ **Access Denied (Doctor-Patient Mapping Policy)**: As Doctor `{doctor_id}`, you are only assigned to Patient `PA001`. Access to Patient `PA002` is restricted. Please contact administrative staff for assignment updates."
+            return f"👨‍⚕️ **Doctor Portal (Dr. Smith)**:\n\nShowing assigned patient **PA001**:\n- **Consult logs**: Routine checkup. Patient reports good response to current inhaler."
+        elif doctor_id == "D002":
+            if "pa001" in query_lower:
+                return f"❌ **Access Denied (Doctor-Patient Mapping Policy)**: As Doctor `{doctor_id}`, you are only assigned to Patient `PA002`. Access to Patient `PA001` is restricted."
+            return f"👨‍⚕️ **Doctor Portal (Dr. Jones)**:\n\nShowing assigned patient **PA002**:\n- **Clinical notes**: Patient reports mild joint pain. Recommendation: Physiotherapy."
+            
+    elif role == "pharmacist":
+        return f"💊 **Pharmacist Access (Pharm. Doe)**:\n\nAuthorized view for Patient records. Checked prescriptions compatibility for Patient `PA001`:\n- **Active Medications**: Albuterol Inhaler (1 puff every 4 hours as needed).\n- **Compatibility**: No drug-drug interactions detected."
+        
+    elif role == "labtechnician":
+        if "diagnosis" in query_lower or "history" in query_lower:
+            return f"❌ **Access Denied (Lab Technician Policy)**: Lab technicians are restricted from viewing clinical histories, diagnoses, or consult notes. You are only authorized to view raw laboratory results."
+        return f"🔬 **Lab Report Portal (Lab Tech 1)**:\n\nShowing lab results for Patient `PA001`:\n- **Complete Blood Count (CBC)**: Normal range.\n- **Lipid Panel**: Cholesterol 180 mg/dL (Normal)."
+        
+    elif role == "admin":
+        return f"⚡ **Administrator Portal (jeevanmg958)**:\n\nFull database access granted. Active Policy Rules:\n- Row-Level Security: Bypass active.\n- Audit logs active.\n\nAll records retrieved across all patients."
+        
+    return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
+
 # Initialize Session State for audit logs and settings
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -346,11 +380,11 @@ with st.sidebar.expander("🔑 Manual Token Override"):
 # Determine credentials to use
 headers_token = get_request_header("x-forwarded-access-token")
 
-db_host = host_override if host_override else (db_client.config.host if db_client else "")
+db_host = host_override if host_override else (db_client.config.host if db_client else os.environ.get("DATABRICKS_HOST", ""))
 db_token = (
     token_override if token_override
     else (headers_token if headers_token
-          else (db_client.config.token if db_client else ""))
+          else (db_client.config.token if db_client else os.environ.get("DATABRICKS_TOKEN", "")))
 )
 
 if db_host and not db_host.startswith(("http://", "https://")):
@@ -362,10 +396,12 @@ if db_host and db_token:
         st.sidebar.success("🟢 Connected (Token Override)")
     elif headers_token:
         st.sidebar.success("🟢 Connected (SSO Header)")
+    elif os.environ.get("DATABRICKS_TOKEN"):
+        st.sidebar.success("🟢 Connected (App Environment)")
     else:
         st.sidebar.success("🟢 Connected (Workspace client)")
 else:
-    st.sidebar.error("🔴 Databricks Auth Required (Use token override for local testing)")
+    st.sidebar.warning("⚠️ Local Simulation Mode Active (No Databricks endpoint credentials)")
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
 col1, col2 = st.columns([2, 1])
@@ -424,15 +460,27 @@ with col1:
     active_query = user_query if user_query else clicked_prompt
 
     if active_query:
-        if not db_host or not db_token:
-            st.error("Please configure Databricks authentication details in the sidebar to send requests.")
-            log_audit_request(user_id, role, active_query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
+        # Check if we should use local simulation mode (e.g. running on localhost without tokens)
+        use_simulation = not db_host or not db_token
+        
+        # Append user message
+        st.session_state.chat_history.append({"role": "user", "content": active_query})
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(active_query)
+                
+        if use_simulation:
+            with st.spinner("Invoking Local Supervisor Agent Simulation..."):
+                time.sleep(0.8) # Simulate slight network latency
+                mock_response = get_mock_agent_response(active_query, role, patient_id, doctor_id)
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": mock_response,
+                    "caption": "⚠️ *Local Simulation Mode Active*"
+                })
+                log_audit_request(user_id, role, active_query, "SUCCESS_SIMULATED", "Processed locally via simulation.")
+                st.rerun()
         else:
-            # Append user message
-            st.session_state.chat_history.append({"role": "user", "content": active_query})
-            with chat_container:
-                with st.chat_message("user"):
-                    st.markdown(active_query)
                     
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
                 # Format query content to automatically pass identity and context
