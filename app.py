@@ -391,7 +391,7 @@ with col1:
                 start_time = datetime.now()
                 try:
                     # Execute API request to serving endpoint
-                    response = requests.post(url, json=payload, headers=headers, timeout=30)
+                    response = requests.post(url, json=payload, headers=headers, timeout=120)
                     duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
                     
                     if response.status_code == 200:
