@@ -250,21 +250,7 @@ USERS_BY_ID = {
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
 
-if not st.session_state.authenticated and not st.session_state.logged_out and (headers_email or headers_user):
-    email_key = (headers_email or headers_user).lower().strip()
-    matched_user = None
-    for u in USERS_BY_ID.values():
-        if u["email"].lower() == email_key:
-            matched_user = u
-            break
-    
-    if matched_user:
-        st.session_state.authenticated = True
-        st.session_state.user_role = matched_user["role"]
-        st.session_state.user_id = matched_user["id"]
-        st.session_state.user_info = matched_user
-        st.session_state.auth_source = "Databricks SSO"
-        log_audit_request(matched_user["id"], matched_user["role"], "User Auto-Login", "SUCCESS", f"Auto-logged in via Databricks SSO header email: {headers_email}")
+# Automatic auto-login is disabled. Users can sign in via the SSO tab or Manual tab.
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
@@ -277,27 +263,66 @@ if not st.session_state.authenticated:
         <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
     """, unsafe_allow_html=True)
     
-    login_role = st.selectbox(
-        "Select Your Role",
-        ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
-        format_func=lambda x: x.upper()
-    )
+    login_tab1, login_tab2 = st.tabs(["👤 Select Identity", "🌐 Databricks SSO"])
     
-    role_users = [u["id"] for u in USERS_BY_ID.values() if u["role"] == login_role]
-    login_id = st.selectbox("Select Your User ID", role_users)
+    with login_tab1:
+        login_role = st.selectbox(
+            "Select Your Role",
+            ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
+            format_func=lambda x: x.upper()
+        )
         
-    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-    
-    if st.button("Sign In to Portal", use_container_width=True):
-        st.session_state.authenticated = True
-        st.session_state.user_role = login_role
-        st.session_state.user_id = login_id
-        st.session_state.user_info = USERS_BY_ID[login_id]
-        st.session_state.auth_source = "Local Credentials"
-        st.session_state.logged_out = False
-        log_audit_request(login_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {login_id}")
-        st.success("Successfully logged in!")
-        st.rerun()
+        # User ID text input for user control
+        default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
+        login_id = st.text_input("Enter Your User ID", value=default_id_val)
+        
+        st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+        
+        if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
+            if login_id in USERS_BY_ID:
+                user_info = USERS_BY_ID[login_id]
+                # Allow forcing user role to the chosen dropdown role for testing mapping mismatches
+                role_to_use = login_role
+            else:
+                user_info = {"role": login_role, "name": f"User {login_id}", "id": login_id, "email": ""}
+                role_to_use = login_role
+                
+            st.session_state.authenticated = True
+            st.session_state.user_role = role_to_use
+            st.session_state.user_id = login_id
+            st.session_state.user_info = user_info
+            st.session_state.auth_source = "Local Credentials"
+            st.session_state.logged_out = False
+            log_audit_request(login_id, role_to_use, "User Sign-In", "SUCCESS", f"Authenticated as {role_to_use.upper()} ID: {login_id}")
+            st.success("Successfully logged in!")
+            st.rerun()
+            
+    with login_tab2:
+        if headers_email or headers_user:
+            st.write(f"Detected SSO User: **{headers_email or headers_user}**")
+            email_key = (headers_email or headers_user).lower().strip()
+            matched_user = None
+            for u in USERS_BY_ID.values():
+                if u["email"].lower() == email_key:
+                    matched_user = u
+                    break
+            
+            if matched_user:
+                st.write(f"Mapped Profile: **{matched_user['name']}** ({matched_user['role'].upper()})")
+                if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
+                    st.session_state.authenticated = True
+                    st.session_state.user_role = matched_user["role"]
+                    st.session_state.user_id = matched_user["id"]
+                    st.session_state.user_info = matched_user
+                    st.session_state.auth_source = "Databricks SSO"
+                    st.session_state.logged_out = False
+                    log_audit_request(matched_user["id"], matched_user["role"], "User SSO Sign-In", "SUCCESS", f"SSO logged in via header email: {headers_email}")
+                    st.success("SSO Sign-in Successful!")
+                    st.rerun()
+            else:
+                st.warning("Your SSO email is not mapped in the portal directory database. Please sign in manually via the Select Identity tab.")
+        else:
+            st.info("No SSO headers detected from Databricks Gateway. Please sign in manually via the Select Identity tab.")
         
     st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
