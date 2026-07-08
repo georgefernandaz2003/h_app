@@ -226,51 +226,7 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
         
     return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
 
-# Helper to fetch active users directly from Databricks Unity Catalog SQL table
-def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, token):
-    if not host or not token:
-        raise ValueError("Databricks connection details (host or token) are missing.")
-    if not warehouse_id:
-        raise ValueError("SQL Warehouse ID is not configured.")
-    client = get_db_client(host, token)
-    if not client:
-        raise ValueError("Failed to initialize Databricks WorkspaceClient. Verify your host and token overrides.")
-        
-    sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table}"
-    res = client.statement_execution.execute_statement(
-        warehouse_id=warehouse_id,
-        statement=sql
-    )
-    # Poll statement status until query finishes execution (e.g. cold-warehouse start)
-    statement_id = res.statement_id
-    state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-    while state in ["PENDING", "RUNNING"]:
-        time.sleep(2)
-        res = client.statement_execution.get_statement(statement_id=statement_id)
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        
-    if state == "FAILED":
-        error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
-        raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
-    if not res.result:
-        raise ValueError(f"No result returned. Statement state: {state}")
-        
-    rows = res.result.data_array or []
-    schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
-    users_map = {}
-    for row in rows:
-        record = dict(zip(schema_fields, row))
-        uid = record.get("user_id")
-        if uid:
-            users_map[uid] = {
-                "role": record.get("role", "").lower().strip(),
-                "name": record.get("username", f"User {uid}"),
-                "id": uid,
-                "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
-                "email": record.get("email", ""),
-                "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
-            }
-    return users_map
+
 
 # Hardcoded local user database
 HARDCODED_USERS = {
@@ -332,8 +288,8 @@ HARDCODED_USERS = {
     }
 }
 
-# Credentials & Role Validation Function (direct query to Databricks UC or Local Hardcoded DB)
-def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
+# Credentials & Role Validation Function (Local Hardcoded DB)
+def validate_credentials(login_role, login_id):
     uid_clean = login_id.strip()
     if uid_clean in HARDCODED_USERS:
         user_info = HARDCODED_USERS[uid_clean]
@@ -341,55 +297,7 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         if db_role != login_role.lower().strip():
             return False, f"Role mismatch: User `{uid_clean}` is registered locally as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
         return True, user_info, "Local Hardcoded Database"
-
-    if not host or not token or not warehouse_id:
-        return False, "Databricks connection details (host, token, or SQL Warehouse ID) are not configured. Direct database check is required.", ""
-            
-    try:
-        client = get_db_client(host, token)
-        if not client:
-            return False, "Failed to initialize Databricks Workspace client.", ""
-        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{login_id.strip()}'"
-        res = client.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
-            statement=sql
-        )
-        # Poll statement status until query finishes execution (e.g. cold-warehouse start)
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        while state in ["PENDING", "RUNNING"]:
-            time.sleep(2)
-            res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-            
-        if state == "FAILED":
-            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
-            raise ValueError(f"Databricks SQL Execution failed: {error_msg}")
-        if not res.result:
-            raise ValueError(f"No result returned. Statement state: {state}")
-            
-        rows = res.result.data_array or []
-        if len(rows) == 0:
-            return False, f"User ID `{login_id}` not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
-            
-        row = rows[0]
-        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
-        record = dict(zip(schema_fields, row))
-        db_role = record.get("role", "").lower().strip()
-        if db_role != login_role.lower().strip():
-            return False, f"Role mismatch: User `{login_id}` is registered in Databricks as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
-            
-        user_info = {
-            "role": db_role,
-            "name": record.get("username", f"User {login_id}"),
-            "id": login_id,
-            "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
-            "email": record.get("email", ""),
-            "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
-        }
-        return True, user_info, "Databricks Unity Catalog"
-    except Exception as e:
-        return False, f"Databricks SQL Validation failed: {str(e)}", ""
+    return False, f"User ID `{login_id}` not found in local database.", ""
 
 # Initialize Session State
 if "audit_logs" not in st.session_state:
@@ -423,28 +331,7 @@ db_token = (
 if db_host and not db_host.startswith(("http://", "https://")):
     db_host = f"https://{db_host}"
 
-with st.sidebar.expander("🗄️ Databricks Table Sync"):
-    sync_catalog = st.text_input("Catalog", value="aienterprise")
-    sync_schema = st.text_input("Schema", value="default")
-    sync_table = st.text_input("Table", value="users")
-    sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
-    if st.button("Sync Users Table", use_container_width=True):
-        if not db_host or not db_token:
-            st.error("Please configure Databricks authentication details to sync.")
-        elif not sync_warehouse:
-            st.error("Please enter a SQL Warehouse ID.")
-        else:
-            with st.spinner("Fetching user table..."):
-                try:
-                    fetched_users = fetch_users_from_databricks(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
-                    if fetched_users:
-                        st.session_state.users_directory = fetched_users
-                        st.success(f"Successfully synced {len(fetched_users)} users!")
-                        st.rerun()
-                    else:
-                        st.error("Failed to sync users table: Returned directory is empty.")
-                except Exception as e:
-                    st.error(f"Failed to sync users table: {str(e)}")
+
 
 USERS_BY_ID = st.session_state.users_directory
 
@@ -538,7 +425,7 @@ if not st.session_state.authenticated:
                 st.error("❌ Please enter both Role and User ID.")
             else:
                 with st.spinner("Validating credentials..."):
-                    success, result, source = validate_credentials(login_role.strip().lower(), login_id.strip(), sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+                    success, result, source = validate_credentials(login_role.strip().lower(), login_id.strip())
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.user_role = login_role.strip().lower()
