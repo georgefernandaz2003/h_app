@@ -92,33 +92,6 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 10px 15px -3px rgba(124, 58, 237, 0.3);
     }
-
-    /* Premium Login UI styles */
-    .login-wrapper {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 2rem 0;
-    }
-    .login-card {
-        background: rgba(30, 41, 59, 0.75);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 2.5rem;
-        width: 100%;
-        max-width: 480px;
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
-        backdrop-filter: blur(12px);
-    }
-    .login-title {
-        font-size: 1.8rem;
-        font-weight: 700;
-        text-align: center;
-        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 1.5rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,233 +110,11 @@ def log_audit_request(user_id, role, query, status, details=""):
         st.session_state.audit_logs = []
     st.session_state.audit_logs.insert(0, log_entry)
 
-# Mock Medical Records Database (HIPAA compliant structure)
-MOCK_PATIENTS_DB = {
-    "P101": {
-        "name": "John Doe",
-        "medical_history": "Diagnosed with Type 2 Diabetes in 2023. Managed with Metformin. Periodic blood sugar checks stable.",
-        "lab_reports": [
-            {"date": "2026-01-15", "test": "HbA1c", "result": "6.8%", "status": "Normal"},
-            {"date": "2026-05-10", "test": "Fast Glucose", "result": "110 mg/dL", "status": "Borderline"}
-        ],
-        "diagnosis_notes": "Patient is adhering well to diet and exercise. Metformin dosage is appropriate."
-    },
-    "P102": {
-        "name": "Jane Smith",
-        "medical_history": "History of mild asthma. Diagnosed in 2021. Albuterol inhaler prescribed for emergency use.",
-        "lab_reports": [
-            {"date": "2026-02-20", "test": "Spirometry", "result": "FEV1 85%", "status": "Normal"}
-        ],
-        "diagnosis_notes": "Slight wheezing reported during spring season. Increase inhaler frequency if needed."
-    },
-    "P103": {
-        "name": "Robert Johnson",
-        "medical_history": "Hypertension diagnosed in 2020. Treated with Lisinopril. Blood pressure consistently monitored.",
-        "lab_reports": [
-            {"date": "2026-03-05", "test": "Basic Metabolic Panel", "result": "Normal electrolytes", "status": "Normal"},
-            {"date": "2026-06-22", "test": "Lipid Panel", "result": "Cholesterol: 210 mg/dL", "status": "Elevated"}
-        ],
-        "diagnosis_notes": "Blood pressure stabilized at 128/82. Recommend low-sodium diet and follow-up in 6 months."
-    }
-}
-
-DOCTOR_PATIENT_MAPPING = {
-    "D201": ["P101", "P103"],
-    "D202": ["P102"]
-}
-
-def simulate_supervisor_agent(query, role, user_id, patient_id, doctor_id):
-    query_lower = query.lower().strip()
-    
-    # Verify identity and role access
-    if not role or role not in ["admin", "doctor", "patient", "lab"]:
-        return "Access Denied: Invalid user role or identity unverified."
-        
-    # PATIENT Policy: Allow access only to own records.
-    if role == "patient":
-        if not patient_id:
-            return "Access Denied: You are authorized to view only your own records."
-            
-        # Stop patient if querying about another patient ID
-        for p_id in MOCK_PATIENTS_DB.keys():
-            if p_id in query and p_id != patient_id:
-                return "Access Denied: You are authorized to view only your own records."
-                
-        patient_data = MOCK_PATIENTS_DB.get(patient_id)
-        if not patient_data:
-            return "Access Denied: You are authorized to view only your own records."
-            
-        if "lab" in query_lower:
-            reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
-            return f"### 📊 Your Lab Reports:\n{reports_str}"
-        elif "diagnosis" in query_lower or "notes" in query_lower:
-            return f"### 📝 Your Diagnosis Notes:\n{patient_data['diagnosis_notes']}"
-        else:
-            return f"### 🏥 Your Medical History Summary:\n{patient_data['medical_history']}\n\n*Note: Row-level filter applied (Patient: {patient_id}).*"
-            
-    # DOCTOR Policy: Check assignments and filter data.
-    elif role == "doctor":
-        if not doctor_id:
-            return "Access Denied: Doctor identity not verified."
-            
-        allowed_patients = DOCTOR_PATIENT_MAPPING.get(doctor_id, [])
-        
-        # Scenario: List doctor's own patients
-        if "my patients" in query_lower or "list patients" in query_lower:
-            patients_list = []
-            for p_id in allowed_patients:
-                p_name = MOCK_PATIENTS_DB[p_id]["name"]
-                patients_list.append(f"- **{p_id}**: {p_name}")
-            return "### 👥 Your Assigned Patients:\n" + "\n".join(patients_list)
-            
-        # Check if the doctor is querying a specific patient
-        target_patient = None
-        for p_id in MOCK_PATIENTS_DB.keys():
-            if p_id in query or p_id.lower() in query_lower:
-                target_patient = p_id
-                break
-                
-        if target_patient:
-            if target_patient not in allowed_patients:
-                return "Access Denied: Patient is not assigned to you."
-                
-            patient_data = MOCK_PATIENTS_DB[target_patient]
-            if "lab" in query_lower:
-                reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
-                return f"### 📊 Lab Reports for Patient {target_patient}:\n{reports_str}"
-            elif "diagnosis" in query_lower or "notes" in query_lower:
-                return f"### 📝 Diagnosis Notes for Patient {target_patient}:\n{patient_data['diagnosis_notes']}"
-            else:
-                return f"### 🏥 Medical Records for Patient {target_patient} ({patient_data['name']}):\n- **History:** {patient_data['medical_history']}\n- **Diagnosis:** {patient_data['diagnosis_notes']}"
-        else:
-            return f"Please specify an assigned patient ID (e.g. {', '.join(allowed_patients)}) to query records."
-            
-    # LAB Policy: Expose only lab reports, redact diagnosis/history.
-    elif role == "lab":
-        if "diagnosis" in query_lower or "notes" in query_lower or "history" in query_lower:
-            return "Access Denied: Lab specialists are only authorized to view laboratory reports. Diagnosis and History notes are restricted."
-            
-        target_patient = None
-        for p_id in MOCK_PATIENTS_DB.keys():
-            if p_id in query or p_id.lower() in query_lower:
-                target_patient = p_id
-                break
-                
-        if target_patient:
-            patient_data = MOCK_PATIENTS_DB[target_patient]
-            reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
-            return f"### 🧪 Lab Test Reports for Patient {target_patient}:\n{reports_str}\n\n*Note: Diagnosis notes and clinical consultation logs redacted under LAB policy.*"
-        else:
-            all_reports = []
-            for p_id, p_data in MOCK_PATIENTS_DB.items():
-                for r in p_data["lab_reports"]:
-                    all_reports.append(f"- **Patient {p_id}** | {r['date']}: {r['test']} -> {r['result']}")
-            return "### 🧪 Laboratory Reports Registry (Names Redacted):\n" + "\n".join(all_reports)
-            
-    # ADMIN Policy: Unrestricted access.
-    elif role == "admin":
-        target_patient = None
-        for p_id in MOCK_PATIENTS_DB.keys():
-            if p_id in query or p_id.lower() in query_lower:
-                target_patient = p_id
-                break
-                
-        if target_patient:
-            patient_data = MOCK_PATIENTS_DB[target_patient]
-            return f"### 🔑 [ADMIN] Full Profile for Patient {target_patient} ({patient_data['name']}):\n- **History:** {patient_data['medical_history']}\n- **Diagnosis Notes:** {patient_data['diagnosis_notes']}\n- **Raw Database Record:**\n```json\n{json.dumps(patient_data, indent=2)}\n```"
-        elif "mapping" in query_lower or "assignments" in query_lower or "doctors" in query_lower:
-            mappings_str = "\n".join([f"- Doctor **{d_id}** assigned to Patients: {', '.join(p_ids)}" for d_id, p_ids in DOCTOR_PATIENT_MAPPING.items()])
-            return f"### 🔑 [ADMIN] Doctor-Patient Assignment Mappings:\n{mappings_str}"
-        else:
-            summary = []
-            for p_id, p_data in MOCK_PATIENTS_DB.items():
-                summary.append(f"- **{p_id}** ({p_data['name']}): {p_data['medical_history']}")
-            return "### 🔑 [ADMIN] Comprehensive Medical Registry:\n" + "\n".join(summary)
-
 # Initialize Session State for audit logs and settings
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
     # Add an initial log
     log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
-
-# User-role mapping in code
-USER_ROLE_MAPPING = {
-    "admin@example.com": {"role": "admin", "password": "adminpassword", "name": "Admin User", "id": "usr_admin_99"},
-    "doctor@example.com": {"role": "doctor", "password": "doctorpassword", "name": "Dr. Sarah Jenkins", "id": "D201", "doctor_id": "D201"},
-    "patient@example.com": {"role": "patient", "password": "patientpassword", "name": "John Doe", "id": "P101", "patient_id": "P101"},
-    "lab@example.com": {"role": "lab", "password": "labpassword", "name": "Lab Specialist Alex", "id": "usr_lab_77"},
-    "george3032003@gmail.com": {"role": "admin", "password": "adminpassword", "name": "George Fernandaz", "id": "usr_admin_george"}
-}
-
-# Check Databricks App Headers for automatic user logins
-headers = st.context.headers
-db_email = headers.get("X-Forwarded-Email")
-db_user = headers.get("X-Forwarded-Preferred-Username")
-db_token = headers.get("X-Forwarded-Access-Token")
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-    st.session_state.user_info = None
-
-# Auto-login if headers are detected (running inside Databricks)
-if (db_email or db_user) and not st.session_state.authenticated:
-    email_key = (db_email or db_user).lower()
-    if email_key in USER_ROLE_MAPPING:
-        info = USER_ROLE_MAPPING[email_key]
-    else:
-        # Fallback patient role for auto-provisioned Databricks user
-        info = {
-            "role": "patient",
-            "name": db_user or db_email,
-            "id": f"usr_{db_user or 'db'}_88",
-            "patient_id": "P101"
-        }
-    st.session_state.authenticated = True
-    st.session_state.user_info = info
-    st.session_state.auth_source = "Databricks SSO"
-    if db_token:
-        st.session_state.db_token = db_token
-
-# Sleek Login UI
-if not st.session_state.authenticated:
-    st.markdown('<div class="login-wrapper">', unsafe_allow_html=True)
-    st.markdown('<div class="login-card">', unsafe_allow_html=True)
-    st.markdown('<div class="login-title">🏥 Healthcare Portal Gateway</div>', unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.9rem; margin-top: -1rem; margin-bottom: 1.5rem;'>Enter your credentials or access via Databricks App Portal</p>", unsafe_allow_html=True)
-    
-    login_username = st.text_input("Username / Email", placeholder="doctor@example.com")
-    login_password = st.text_input("Password", type="password", placeholder="••••••••")
-    
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-    
-    # Sign In Action
-    if st.button("Sign In Securely", use_container_width=True):
-        email_key = login_username.lower().strip()
-        if email_key in USER_ROLE_MAPPING and USER_ROLE_MAPPING[email_key]["password"] == login_password:
-            st.session_state.authenticated = True
-            st.session_state.user_info = USER_ROLE_MAPPING[email_key]
-            st.session_state.auth_source = "Local Credentials"
-            log_audit_request(email_key, USER_ROLE_MAPPING[email_key]["role"], "User Login", "SUCCESS", "Local portal authentication successful.")
-            st.success("Successfully logged in!")
-            st.rerun()
-        else:
-            st.error("Invalid username or password.")
-            log_audit_request(login_username or "UNKNOWN", "none", "User Login", "FAILED", "Incorrect username or password.")
-            
-    st.markdown("<hr style='border-color: rgba(255, 255, 255, 0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; font-weight: 600;'>Local Demo Accounts:</p>", unsafe_allow_html=True)
-    
-    accounts_col1, accounts_col2 = st.columns(2)
-    with accounts_col1:
-        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0;'>🔑 <b>Admin</b>:<br>admin@example.com / adminpassword</p>", unsafe_allow_html=True)
-        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0.5rem 0 0 0;'>🔑 <b>Doctor</b>:<br>doctor@example.com / doctorpassword</p>", unsafe_allow_html=True)
-    with accounts_col2:
-        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0;'>🔑 <b>Patient</b>:<br>patient@example.com / patientpassword</p>", unsafe_allow_html=True)
-        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0.5rem 0 0 0;'>🔑 <b>Lab</b>:<br>lab@example.com / labpassword</p>", unsafe_allow_html=True)
-        
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Supervisor Agent Gateway</div>', unsafe_allow_html=True)
@@ -380,13 +131,15 @@ def get_db_client():
 
 db_client = get_db_client()
 
-# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT =================
-st.sidebar.markdown("### 🔐 Authenticated Identity")
-user_info = st.session_state.user_info
-role = user_info["role"]
+# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT SIMULATOR =================
+st.sidebar.markdown("### 🔐 Identity & Access Management")
+st.sidebar.caption("Simulate the authenticated user session context that is passed to the supervisor agent.")
 
-st.sidebar.markdown(f"**Logged in as:** `{user_info['name']}`")
-st.sidebar.markdown(f"**Auth Method:** `{st.session_state.auth_source}`")
+role = st.sidebar.selectbox(
+    "Select Role",
+    ["patient", "doctor", "lab", "admin"],
+    format_func=lambda x: x.upper()
+)
 
 # Render badge based on role
 role_badges = {
@@ -395,72 +148,58 @@ role_badges = {
     "lab": '<span class="badge badge-lab">Lab Specialist</span>',
     "admin": '<span class="badge badge-admin">Administrator</span>'
 }
-st.sidebar.markdown(f"**Access level:** {role_badges[role]}", unsafe_allow_html=True)
+st.sidebar.markdown(f"**Current Context Badge:** {role_badges[role]}", unsafe_allow_html=True)
 
-# Determine defaults from active identity
-user_id = user_info["id"]
-patient_id = user_info.get("patient_id", "")
-doctor_id = user_info.get("doctor_id", "")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛡️ Active Session Context")
+# Dynamic Inputs based on role
+user_id = st.sidebar.text_input("User ID (Authenticated)", value=f"usr_{role}_88")
+patient_id = ""
+doctor_id = ""
 
 if role == "patient":
-    patient_id = st.sidebar.selectbox("Patient ID", [patient_id], index=0, disabled=True)
+    patient_id = st.sidebar.selectbox("Patient ID", ["P101", "P102", "P103"], index=0)
     st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
 elif role == "doctor":
-    doctor_id = st.sidebar.selectbox("Doctor ID", [doctor_id], index=0, disabled=True)
+    doctor_id = st.sidebar.selectbox("Doctor ID", ["D201", "D202"], index=0)
     
+    st.sidebar.markdown("**Simulated Doctor-Patient Mapping Table:**")
     mapping_df = pd.DataFrame({
         "Doctor ID": ["D201", "D201", "D202"],
         "Assigned Patient ID": ["P101", "P103", "P102"]
     })
-    st.sidebar.markdown("**Assigned Patients Mapping Table:**")
     st.sidebar.table(mapping_df)
     
+    # Active doctor patient mapping display
     assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
-    patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
     st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
 elif role == "lab":
     st.sidebar.info("🔬 Lab role allows access only to lab reports. Diagnosis notes are filtered out.")
 elif role == "admin":
-    st.sidebar.warning("⚡ Admin has unrestricted database access.")
-    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "P101", "P102", "P103"], index=0)
-    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D201", "D202"], index=0)
+    st.sidebar.warning("⚡ Admin role has unrestricted access to mappings, users, and all records.")
 
 # Sidebar Endpoint Configuration
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Endpoint Settings")
 
+# Default endpoint name from your serving endpoint screenshot
 endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-871d1c5e-endpoint")
 
-# Setup tokens and host URLs
-host_override = os.environ.get("DATABRICKS_HOST", "")
-token_override = os.environ.get("DATABRICKS_TOKEN", "")
+# If client is not authenticated automatically, allow manual token setup
+with st.sidebar.expander("🔑 Manual Token Override"):
+    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
+    token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
 
+# Determine credentials to use
 db_host = host_override if host_override else (db_client.config.host if db_client else "")
-db_token = st.session_state.get("db_token", "") or token_override or (db_client.config.token if db_client else "")
+db_token = token_override if token_override else (db_client.config.token if db_client else "")
 
-with st.sidebar.expander("🔑 Connection Details"):
-    st.text_input("Databricks Host URL", value=db_host, disabled=True)
-    st.text_input("Databricks Token Source", value="SSO Header" if st.session_state.get("db_token") else "Environment/Config", disabled=True)
+if db_host and not db_host.startswith(("http://", "https://")):
+    db_host = f"https://{db_host}"
 
-# Connection Status Indicator & Mode Toggle
+# Connection Status Indicator
 if db_host and db_token:
-    st.sidebar.success("🟢 Databricks Connected")
-    simulation_mode = st.sidebar.checkbox("Local Agent Simulation Mode", value=False)
+    st.sidebar.success("🟢 Databricks Endpoint Connected")
 else:
-    st.sidebar.warning("🟡 Local Simulation Mode Active")
-    simulation_mode = True
-
-# Log Out Button
-st.sidebar.markdown("---")
-if st.sidebar.button("🚪 Log Out", use_container_width=True):
-    st.session_state.authenticated = False
-    st.session_state.user_info = None
-    if "db_token" in st.session_state:
-        del st.session_state.db_token
-    st.rerun()
+    st.sidebar.error("🔴 Databricks Auth Required (Use token override for local testing)")
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
 col1, col2 = st.columns([2, 1])
@@ -503,27 +242,10 @@ with col1:
     query = st.text_area("Your Question / Command", value=default_text, height=100)
     
     # Submit Request
-    if st.button("Send Request to Serving Endpoint" if not simulation_mode else "Query Simulated Supervisor Agent", use_container_width=True):
-        if not simulation_mode and (not db_host or not db_token):
+    if st.button("Send Request to Serving Endpoint", use_container_width=True):
+        if not db_host or not db_token:
             st.error("Please configure Databricks authentication details in the sidebar to send requests.")
             log_audit_request(user_id, role, query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
-        elif simulation_mode:
-            with st.spinner("Simulating Supervisor Agent & Applying Policy Rules..."):
-                start_time = datetime.now()
-                # Run the simulation logic
-                response_text = simulate_supervisor_agent(query, role, user_id, patient_id, doctor_id)
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                
-                st.success(f"Simulation Response Generated in {duration_ms}ms")
-                st.markdown("#### 📝 Agent Response:")
-                st.info(response_text)
-                
-                # Determine outcome based on "Access Denied" or other factors
-                if "Access Denied" in response_text:
-                    outcome = "DENIED"
-                else:
-                    outcome = "SUCCESS_SIMULATION"
-                log_audit_request(user_id, role, query, outcome, f"Simulated execution. Response size: {len(response_text)} chars")
         else:
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
                 # Prepare context and payload
