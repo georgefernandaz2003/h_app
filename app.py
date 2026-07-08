@@ -469,6 +469,24 @@ if st.session_state.authenticated:
         st.session_state.authenticated = False
         st.session_state.user_id = None
         st.session_state.user_role = None
+        if "user_info" in st.session_state:
+            st.session_state.user_info = None
+        if "auth_source" in st.session_state:
+            st.session_state.auth_source = None
+        st.session_state.chat_history = []
+        if "login_role_input" in st.session_state:
+            st.session_state.login_role_input = ""
+        if "login_id_input" in st.session_state:
+            st.session_state.login_id_input = ""
+        for select_key in [
+            "doctor_patient_select",
+            "pharmacist_patient_select",
+            "labtech_patient_select",
+            "admin_patient_select",
+            "admin_doctor_select"
+        ]:
+            if select_key in st.session_state:
+                del st.session_state[select_key]
         st.session_state.logged_out = True
         st.rerun()
     if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
@@ -488,18 +506,18 @@ if st.session_state.authenticated:
         st.sidebar.table(mapping_df)
         assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
         if assigned:
-            patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
+            patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
             st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
     elif role == "pharmacist":
         st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
+        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="pharmacist_patient_select")
     elif role == "labtechnician":
         st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
+        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="labtech_patient_select")
     elif role == "admin":
         st.sidebar.warning("⚡ Admin has unrestricted access.")
-        patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0)
-        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0)
+        patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0, key="admin_patient_select")
+        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0, key="admin_doctor_select")
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
