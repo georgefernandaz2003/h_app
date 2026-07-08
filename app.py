@@ -92,6 +92,33 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 10px 15px -3px rgba(124, 58, 237, 0.3);
     }
+
+    /* Premium Login UI styles */
+    .login-wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 2rem 0;
+    }
+    .login-card {
+        background: rgba(30, 41, 59, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        padding: 2.5rem;
+        width: 100%;
+        max-width: 480px;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(12px);
+    }
+    .login-title {
+        font-size: 1.8rem;
+        font-weight: 700;
+        text-align: center;
+        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 1.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,6 +143,85 @@ if "audit_logs" not in st.session_state:
     # Add an initial log
     log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
 
+# User-role mapping in code
+USER_ROLE_MAPPING = {
+    "admin@example.com": {"role": "admin", "password": "adminpassword", "name": "Admin User", "id": "usr_admin_99"},
+    "doctor@example.com": {"role": "doctor", "password": "doctorpassword", "name": "Dr. Sarah Jenkins", "id": "D201", "doctor_id": "D201"},
+    "patient@example.com": {"role": "patient", "password": "patientpassword", "name": "John Doe", "id": "P101", "patient_id": "P101"},
+    "lab@example.com": {"role": "lab", "password": "labpassword", "name": "Lab Specialist Alex", "id": "usr_lab_77"},
+    "george3032003@gmail.com": {"role": "admin", "password": "adminpassword", "name": "George Fernandaz", "id": "usr_admin_george"}
+}
+
+# Check Databricks App Headers for automatic user logins
+headers = st.context.headers
+db_email = headers.get("X-Forwarded-Email")
+db_user = headers.get("X-Forwarded-Preferred-Username")
+db_token = headers.get("X-Forwarded-Access-Token")
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.user_info = None
+
+# Auto-login if headers are detected (running inside Databricks)
+if (db_email or db_user) and not st.session_state.authenticated:
+    email_key = (db_email or db_user).lower()
+    if email_key in USER_ROLE_MAPPING:
+        info = USER_ROLE_MAPPING[email_key]
+    else:
+        # Fallback patient role for auto-provisioned Databricks user
+        info = {
+            "role": "patient",
+            "name": db_user or db_email,
+            "id": f"usr_{db_user or 'db'}_88",
+            "patient_id": "P101"
+        }
+    st.session_state.authenticated = True
+    st.session_state.user_info = info
+    st.session_state.auth_source = "Databricks SSO"
+    if db_token:
+        st.session_state.db_token = db_token
+
+# Sleek Login UI
+if not st.session_state.authenticated:
+    st.markdown('<div class="login-wrapper">', unsafe_allow_html=True)
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
+    st.markdown('<div class="login-title">🏥 Healthcare Portal Gateway</div>', unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.9rem; margin-top: -1rem; margin-bottom: 1.5rem;'>Enter your credentials or access via Databricks App Portal</p>", unsafe_allow_html=True)
+    
+    login_username = st.text_input("Username / Email", placeholder="doctor@example.com")
+    login_password = st.text_input("Password", type="password", placeholder="••••••••")
+    
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    
+    # Sign In Action
+    if st.button("Sign In Securely", use_container_width=True):
+        email_key = login_username.lower().strip()
+        if email_key in USER_ROLE_MAPPING and USER_ROLE_MAPPING[email_key]["password"] == login_password:
+            st.session_state.authenticated = True
+            st.session_state.user_info = USER_ROLE_MAPPING[email_key]
+            st.session_state.auth_source = "Local Credentials"
+            log_audit_request(email_key, USER_ROLE_MAPPING[email_key]["role"], "User Login", "SUCCESS", "Local portal authentication successful.")
+            st.success("Successfully logged in!")
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+            log_audit_request(login_username or "UNKNOWN", "none", "User Login", "FAILED", "Incorrect username or password.")
+            
+    st.markdown("<hr style='border-color: rgba(255, 255, 255, 0.1); margin: 1.5rem 0;'>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.5rem; font-weight: 600;'>Local Demo Accounts:</p>", unsafe_allow_html=True)
+    
+    accounts_col1, accounts_col2 = st.columns(2)
+    with accounts_col1:
+        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0;'>🔑 <b>Admin</b>:<br>admin@example.com / adminpassword</p>", unsafe_allow_html=True)
+        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0.5rem 0 0 0;'>🔑 <b>Doctor</b>:<br>doctor@example.com / doctorpassword</p>", unsafe_allow_html=True)
+    with accounts_col2:
+        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0;'>🔑 <b>Patient</b>:<br>patient@example.com / patientpassword</p>", unsafe_allow_html=True)
+        st.markdown("<p style='font-size: 0.75rem; color: #cbd5e1; margin: 0.5rem 0 0 0;'>🔑 <b>Lab</b>:<br>lab@example.com / labpassword</p>", unsafe_allow_html=True)
+        
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
+
 # App Header
 st.markdown('<div class="main-header">Healthcare Supervisor Agent Gateway</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Enforcing Secure Role-Based Access Control (RBAC) & Row-Level Filtering via Databricks Model Serving</div>', unsafe_allow_html=True)
@@ -131,15 +237,13 @@ def get_db_client():
 
 db_client = get_db_client()
 
-# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT SIMULATOR =================
-st.sidebar.markdown("### 🔐 Identity & Access Management")
-st.sidebar.caption("Simulate the authenticated user session context that is passed to the supervisor agent.")
+# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT =================
+st.sidebar.markdown("### 🔐 Authenticated Identity")
+user_info = st.session_state.user_info
+role = user_info["role"]
 
-role = st.sidebar.selectbox(
-    "Select Role",
-    ["patient", "doctor", "lab", "admin"],
-    format_func=lambda x: x.upper()
-)
+st.sidebar.markdown(f"**Logged in as:** `{user_info['name']}`")
+st.sidebar.markdown(f"**Auth Method:** `{st.session_state.auth_source}`")
 
 # Render badge based on role
 role_badges = {
@@ -148,55 +252,70 @@ role_badges = {
     "lab": '<span class="badge badge-lab">Lab Specialist</span>',
     "admin": '<span class="badge badge-admin">Administrator</span>'
 }
-st.sidebar.markdown(f"**Current Context Badge:** {role_badges[role]}", unsafe_allow_html=True)
+st.sidebar.markdown(f"**Access level:** {role_badges[role]}", unsafe_allow_html=True)
 
-# Dynamic Inputs based on role
-user_id = st.sidebar.text_input("User ID (Authenticated)", value=f"usr_{role}_88")
-patient_id = ""
-doctor_id = ""
+# Determine defaults from active identity
+user_id = user_info["id"]
+patient_id = user_info.get("patient_id", "")
+doctor_id = user_info.get("doctor_id", "")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛡️ Active Session Context")
 
 if role == "patient":
-    patient_id = st.sidebar.selectbox("Patient ID", ["P101", "P102", "P103"], index=0)
+    patient_id = st.sidebar.selectbox("Patient ID", [patient_id], index=0, disabled=True)
     st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
 elif role == "doctor":
-    doctor_id = st.sidebar.selectbox("Doctor ID", ["D201", "D202"], index=0)
+    doctor_id = st.sidebar.selectbox("Doctor ID", [doctor_id], index=0, disabled=True)
     
-    st.sidebar.markdown("**Simulated Doctor-Patient Mapping Table:**")
     mapping_df = pd.DataFrame({
         "Doctor ID": ["D201", "D201", "D202"],
         "Assigned Patient ID": ["P101", "P103", "P102"]
     })
+    st.sidebar.markdown("**Assigned Patients Mapping Table:**")
     st.sidebar.table(mapping_df)
     
-    # Active doctor patient mapping display
     assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
+    patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
     st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
 elif role == "lab":
     st.sidebar.info("🔬 Lab role allows access only to lab reports. Diagnosis notes are filtered out.")
 elif role == "admin":
-    st.sidebar.warning("⚡ Admin role has unrestricted access to mappings, users, and all records.")
+    st.sidebar.warning("⚡ Admin has unrestricted database access.")
+    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "P101", "P102", "P103"], index=0)
+    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D201", "D202"], index=0)
 
 # Sidebar Endpoint Configuration
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Endpoint Settings")
 
-# Default endpoint name from your serving endpoint screenshot
 endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-871d1c5e-endpoint")
 
-# If client is not authenticated automatically, allow manual token setup
-with st.sidebar.expander("🔑 Manual Token Override"):
-    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
-    token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
+# Setup tokens and host URLs
+host_override = os.environ.get("DATABRICKS_HOST", "")
+token_override = os.environ.get("DATABRICKS_TOKEN", "")
 
-# Determine credentials to use
 db_host = host_override if host_override else (db_client.config.host if db_client else "")
-db_token = token_override if token_override else (db_client.config.token if db_client else "")
+db_token = st.session_state.get("db_token", "") or token_override or (db_client.config.token if db_client else "")
+
+with st.sidebar.expander("🔑 Connection Details"):
+    st.text_input("Databricks Host URL", value=db_host, disabled=True)
+    st.text_input("Databricks Token Source", value="SSO Header" if st.session_state.get("db_token") else "Environment/Config", disabled=True)
 
 # Connection Status Indicator
 if db_host and db_token:
-    st.sidebar.success("🟢 Databricks Endpoint Connected")
+    st.sidebar.success("🟢 Databricks Connected")
 else:
-    st.sidebar.error("🔴 Databricks Auth Required (Use token override for local testing)")
+    st.sidebar.error("🔴 Databricks Auth Required")
+
+# Log Out Button
+st.sidebar.markdown("---")
+if st.sidebar.button("🚪 Log Out", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.user_info = None
+    if "db_token" in st.session_state:
+        del st.session_state.db_token
+    st.rerun()
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
 col1, col2 = st.columns([2, 1])
