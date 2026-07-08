@@ -279,23 +279,28 @@ if not st.session_state.authenticated:
         st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
         
         if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
-            if login_id in USERS_BY_ID:
-                user_info = USERS_BY_ID[login_id]
-                # Allow forcing user role to the chosen dropdown role for testing mapping mismatches
-                role_to_use = login_role
+            clean_id = login_id.strip()
+            
+            # Validate credentials against the backend user database
+            if clean_id in USERS_BY_ID:
+                user_info = USERS_BY_ID[clean_id]
+                # Check if selected role matches database role
+                if user_info["role"] == login_role:
+                    st.session_state.authenticated = True
+                    st.session_state.user_role = login_role
+                    st.session_state.user_id = clean_id
+                    st.session_state.user_info = user_info
+                    st.session_state.auth_source = "Local Credentials"
+                    st.session_state.logged_out = False
+                    log_audit_request(clean_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {clean_id}")
+                    st.success("Successfully logged in!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.")
+                    log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_ROLE_MISMATCH", f"Tried to sign in as {login_role.upper()}")
             else:
-                user_info = {"role": login_role, "name": f"User {login_id}", "id": login_id, "email": ""}
-                role_to_use = login_role
-                
-            st.session_state.authenticated = True
-            st.session_state.user_role = role_to_use
-            st.session_state.user_id = login_id
-            st.session_state.user_info = user_info
-            st.session_state.auth_source = "Local Credentials"
-            st.session_state.logged_out = False
-            log_audit_request(login_id, role_to_use, "User Sign-In", "SUCCESS", f"Authenticated as {role_to_use.upper()} ID: {login_id}")
-            st.success("Successfully logged in!")
-            st.rerun()
+                st.error("❌ Invalid User ID: The entered ID does not exist in the portal database.")
+                log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_INVALID_ID", "ID not found in database.")
             
     with login_tab2:
         if headers_email or headers_user:
