@@ -376,7 +376,7 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
         record = dict(zip(schema_fields, row))
         db_role = record.get("role", "").lower().strip()
-        if db_role != login_role:
+        if db_role != login_role.lower().strip():
             return False, f"Role mismatch: User `{login_id}` is registered in Databricks as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
             
         user_info = {
@@ -511,27 +511,29 @@ if not st.session_state.authenticated:
     <div class="status-card" style="max-width: 500px; margin: 2rem auto; border-radius: 16px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px);">
         <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
     """, unsafe_allow_html=True)
-    login_tab1, login_tab2 = st.tabs(["👤 Select Identity", "🌐 Databricks SSO"])
+    login_tab1, login_tab2 = st.tabs(["👤 Manual Sign-In", "🌐 Databricks SSO"])
     with login_tab1:
-        login_role = st.selectbox("Select Your Role", ["patient", "doctor", "pharmacist", "labtechnician", "admin"], format_func=lambda x: x.upper())
-        default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
-        login_id = st.text_input("Enter Your User ID", value=default_id_val)
+        login_role = st.text_input("Enter Your Role", placeholder="e.g. doctor, patient, admin, pharmacist, labtechnician", key="login_role_input")
+        login_id = st.text_input("Enter Your User ID", placeholder="e.g. D001, PA001, U001", key="login_id_input")
         if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
-            with st.spinner("Validating credentials..."):
-                success, result, source = validate_credentials(login_role, login_id, sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
-                if success:
-                    st.session_state.authenticated = True
-                    st.session_state.user_role = login_role
-                    st.session_state.user_id = login_id.strip()
-                    st.session_state.user_info = result
-                    st.session_state.auth_source = source
-                    st.session_state.logged_out = False
-                    log_audit_request(login_id.strip(), login_role, "User Sign-In", "SUCCESS", f"Authenticated via {source}")
-                    st.success(f"Successfully logged in via {source}!")
-                    st.rerun()
-                else:
-                    st.error(f"❌ Login Failed: {result}")
-                    log_audit_request(login_id.strip(), login_role, "User Sign-In", "FAILED", result)
+            if not login_role or not login_id:
+                st.error("❌ Please enter both Role and User ID.")
+            else:
+                with st.spinner("Validating credentials..."):
+                    success, result, source = validate_credentials(login_role.strip().lower(), login_id.strip(), sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.user_role = login_role.strip().lower()
+                        st.session_state.user_id = login_id.strip()
+                        st.session_state.user_info = result
+                        st.session_state.auth_source = source
+                        st.session_state.logged_out = False
+                        log_audit_request(login_id.strip(), login_role.strip().lower(), "User Sign-In", "SUCCESS", f"Authenticated via {source}")
+                        st.success(f"Successfully logged in via {source}!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Login Failed: {result}")
+                        log_audit_request(login_id.strip(), login_role.strip().lower(), "User Sign-In", "FAILED", result)
     with login_tab2:
         if headers_email or headers_user:
             st.write(f"Detected SSO User: **{headers_email or headers_user}**")
