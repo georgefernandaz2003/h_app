@@ -137,6 +137,149 @@ def log_audit_request(user_id, role, query, status, details=""):
         st.session_state.audit_logs = []
     st.session_state.audit_logs.insert(0, log_entry)
 
+# Mock Medical Records Database (HIPAA compliant structure)
+MOCK_PATIENTS_DB = {
+    "P101": {
+        "name": "John Doe",
+        "medical_history": "Diagnosed with Type 2 Diabetes in 2023. Managed with Metformin. Periodic blood sugar checks stable.",
+        "lab_reports": [
+            {"date": "2026-01-15", "test": "HbA1c", "result": "6.8%", "status": "Normal"},
+            {"date": "2026-05-10", "test": "Fast Glucose", "result": "110 mg/dL", "status": "Borderline"}
+        ],
+        "diagnosis_notes": "Patient is adhering well to diet and exercise. Metformin dosage is appropriate."
+    },
+    "P102": {
+        "name": "Jane Smith",
+        "medical_history": "History of mild asthma. Diagnosed in 2021. Albuterol inhaler prescribed for emergency use.",
+        "lab_reports": [
+            {"date": "2026-02-20", "test": "Spirometry", "result": "FEV1 85%", "status": "Normal"}
+        ],
+        "diagnosis_notes": "Slight wheezing reported during spring season. Increase inhaler frequency if needed."
+    },
+    "P103": {
+        "name": "Robert Johnson",
+        "medical_history": "Hypertension diagnosed in 2020. Treated with Lisinopril. Blood pressure consistently monitored.",
+        "lab_reports": [
+            {"date": "2026-03-05", "test": "Basic Metabolic Panel", "result": "Normal electrolytes", "status": "Normal"},
+            {"date": "2026-06-22", "test": "Lipid Panel", "result": "Cholesterol: 210 mg/dL", "status": "Elevated"}
+        ],
+        "diagnosis_notes": "Blood pressure stabilized at 128/82. Recommend low-sodium diet and follow-up in 6 months."
+    }
+}
+
+DOCTOR_PATIENT_MAPPING = {
+    "D201": ["P101", "P103"],
+    "D202": ["P102"]
+}
+
+def simulate_supervisor_agent(query, role, user_id, patient_id, doctor_id):
+    query_lower = query.lower().strip()
+    
+    # Verify identity and role access
+    if not role or role not in ["admin", "doctor", "patient", "lab"]:
+        return "Access Denied: Invalid user role or identity unverified."
+        
+    # PATIENT Policy: Allow access only to own records.
+    if role == "patient":
+        if not patient_id:
+            return "Access Denied: You are authorized to view only your own records."
+            
+        # Stop patient if querying about another patient ID
+        for p_id in MOCK_PATIENTS_DB.keys():
+            if p_id in query and p_id != patient_id:
+                return "Access Denied: You are authorized to view only your own records."
+                
+        patient_data = MOCK_PATIENTS_DB.get(patient_id)
+        if not patient_data:
+            return "Access Denied: You are authorized to view only your own records."
+            
+        if "lab" in query_lower:
+            reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
+            return f"### 📊 Your Lab Reports:\n{reports_str}"
+        elif "diagnosis" in query_lower or "notes" in query_lower:
+            return f"### 📝 Your Diagnosis Notes:\n{patient_data['diagnosis_notes']}"
+        else:
+            return f"### 🏥 Your Medical History Summary:\n{patient_data['medical_history']}\n\n*Note: Row-level filter applied (Patient: {patient_id}).*"
+            
+    # DOCTOR Policy: Check assignments and filter data.
+    elif role == "doctor":
+        if not doctor_id:
+            return "Access Denied: Doctor identity not verified."
+            
+        allowed_patients = DOCTOR_PATIENT_MAPPING.get(doctor_id, [])
+        
+        # Scenario: List doctor's own patients
+        if "my patients" in query_lower or "list patients" in query_lower:
+            patients_list = []
+            for p_id in allowed_patients:
+                p_name = MOCK_PATIENTS_DB[p_id]["name"]
+                patients_list.append(f"- **{p_id}**: {p_name}")
+            return "### 👥 Your Assigned Patients:\n" + "\n".join(patients_list)
+            
+        # Check if the doctor is querying a specific patient
+        target_patient = None
+        for p_id in MOCK_PATIENTS_DB.keys():
+            if p_id in query or p_id.lower() in query_lower:
+                target_patient = p_id
+                break
+                
+        if target_patient:
+            if target_patient not in allowed_patients:
+                return "Access Denied: Patient is not assigned to you."
+                
+            patient_data = MOCK_PATIENTS_DB[target_patient]
+            if "lab" in query_lower:
+                reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
+                return f"### 📊 Lab Reports for Patient {target_patient}:\n{reports_str}"
+            elif "diagnosis" in query_lower or "notes" in query_lower:
+                return f"### 📝 Diagnosis Notes for Patient {target_patient}:\n{patient_data['diagnosis_notes']}"
+            else:
+                return f"### 🏥 Medical Records for Patient {target_patient} ({patient_data['name']}):\n- **History:** {patient_data['medical_history']}\n- **Diagnosis:** {patient_data['diagnosis_notes']}"
+        else:
+            return f"Please specify an assigned patient ID (e.g. {', '.join(allowed_patients)}) to query records."
+            
+    # LAB Policy: Expose only lab reports, redact diagnosis/history.
+    elif role == "lab":
+        if "diagnosis" in query_lower or "notes" in query_lower or "history" in query_lower:
+            return "Access Denied: Lab specialists are only authorized to view laboratory reports. Diagnosis and History notes are restricted."
+            
+        target_patient = None
+        for p_id in MOCK_PATIENTS_DB.keys():
+            if p_id in query or p_id.lower() in query_lower:
+                target_patient = p_id
+                break
+                
+        if target_patient:
+            patient_data = MOCK_PATIENTS_DB[target_patient]
+            reports_str = "\n".join([f"- {r['date']}: {r['test']} -> {r['result']} ({r['status']})" for r in patient_data["lab_reports"]])
+            return f"### 🧪 Lab Test Reports for Patient {target_patient}:\n{reports_str}\n\n*Note: Diagnosis notes and clinical consultation logs redacted under LAB policy.*"
+        else:
+            all_reports = []
+            for p_id, p_data in MOCK_PATIENTS_DB.items():
+                for r in p_data["lab_reports"]:
+                    all_reports.append(f"- **Patient {p_id}** | {r['date']}: {r['test']} -> {r['result']}")
+            return "### 🧪 Laboratory Reports Registry (Names Redacted):\n" + "\n".join(all_reports)
+            
+    # ADMIN Policy: Unrestricted access.
+    elif role == "admin":
+        target_patient = None
+        for p_id in MOCK_PATIENTS_DB.keys():
+            if p_id in query or p_id.lower() in query_lower:
+                target_patient = p_id
+                break
+                
+        if target_patient:
+            patient_data = MOCK_PATIENTS_DB[target_patient]
+            return f"### 🔑 [ADMIN] Full Profile for Patient {target_patient} ({patient_data['name']}):\n- **History:** {patient_data['medical_history']}\n- **Diagnosis Notes:** {patient_data['diagnosis_notes']}\n- **Raw Database Record:**\n```json\n{json.dumps(patient_data, indent=2)}\n```"
+        elif "mapping" in query_lower or "assignments" in query_lower or "doctors" in query_lower:
+            mappings_str = "\n".join([f"- Doctor **{d_id}** assigned to Patients: {', '.join(p_ids)}" for d_id, p_ids in DOCTOR_PATIENT_MAPPING.items()])
+            return f"### 🔑 [ADMIN] Doctor-Patient Assignment Mappings:\n{mappings_str}"
+        else:
+            summary = []
+            for p_id, p_data in MOCK_PATIENTS_DB.items():
+                summary.append(f"- **{p_id}** ({p_data['name']}): {p_data['medical_history']}")
+            return "### 🔑 [ADMIN] Comprehensive Medical Registry:\n" + "\n".join(summary)
+
 # Initialize Session State for audit logs and settings
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -302,11 +445,13 @@ with st.sidebar.expander("🔑 Connection Details"):
     st.text_input("Databricks Host URL", value=db_host, disabled=True)
     st.text_input("Databricks Token Source", value="SSO Header" if st.session_state.get("db_token") else "Environment/Config", disabled=True)
 
-# Connection Status Indicator
+# Connection Status Indicator & Mode Toggle
 if db_host and db_token:
     st.sidebar.success("🟢 Databricks Connected")
+    simulation_mode = st.sidebar.checkbox("Local Agent Simulation Mode", value=False)
 else:
-    st.sidebar.error("🔴 Databricks Auth Required")
+    st.sidebar.warning("🟡 Local Simulation Mode Active")
+    simulation_mode = True
 
 # Log Out Button
 st.sidebar.markdown("---")
@@ -358,10 +503,27 @@ with col1:
     query = st.text_area("Your Question / Command", value=default_text, height=100)
     
     # Submit Request
-    if st.button("Send Request to Serving Endpoint", use_container_width=True):
-        if not db_host or not db_token:
+    if st.button("Send Request to Serving Endpoint" if not simulation_mode else "Query Simulated Supervisor Agent", use_container_width=True):
+        if not simulation_mode and (not db_host or not db_token):
             st.error("Please configure Databricks authentication details in the sidebar to send requests.")
             log_audit_request(user_id, role, query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
+        elif simulation_mode:
+            with st.spinner("Simulating Supervisor Agent & Applying Policy Rules..."):
+                start_time = datetime.now()
+                # Run the simulation logic
+                response_text = simulate_supervisor_agent(query, role, user_id, patient_id, doctor_id)
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                
+                st.success(f"Simulation Response Generated in {duration_ms}ms")
+                st.markdown("#### 📝 Agent Response:")
+                st.info(response_text)
+                
+                # Determine outcome based on "Access Denied" or other factors
+                if "Access Denied" in response_text:
+                    outcome = "DENIED"
+                else:
+                    outcome = "SUCCESS_SIMULATION"
+                log_audit_request(user_id, role, query, outcome, f"Simulated execution. Response size: {len(response_text)} chars")
         else:
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
                 # Prepare context and payload
