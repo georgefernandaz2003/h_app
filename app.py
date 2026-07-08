@@ -268,12 +268,9 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, toke
                 "id": uid,
                 "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
                 "email": record.get("email", ""),
-                    "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
-                }
-        return users_map
-    except Exception as e:
-        st.sidebar.error(f"SQL Error: {str(e)}")
-        return None
+                "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
+            }
+    return users_map
 
 # Credentials & Role Validation Function (direct query to Databricks UC)
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
