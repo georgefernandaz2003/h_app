@@ -197,29 +197,25 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
     
     # Check roles and target IDs for RBAC simulation
     if role == "patient":
-        if patient_id and ("pa002" in query_lower or "p002" in query_lower):
-            return f"❌ **Access Denied (RBAC Policy violation)**: As a Patient (`{patient_id}`), you are only authorized to access your own records. Access to records of patient `PA002` is denied and has been reported to security audit compliance."
-        return f"📋 **Patient Record Details (PA001)**:\n\n- **Name**: Patient 001\n- **Date of Birth**: 1990-05-15\n- **Primary Care Physician**: Dr. Smith (D001)\n- **Medical History**: Diagnosed with Asthma (2021), Allergy to Penicillin."
+        # If querying another patient ID
+        if patient_id and any(pid in query_lower for pid in ["pa001", "pa002", "pa003", "p001", "p002", "p003"]) and patient_id.lower() not in query_lower:
+            return f"❌ **Access Denied (RBAC Policy violation)**: As a Patient (`{patient_id}`), you are only authorized to access your own records. Access to records of other patients is denied and has been logged."
+        return f"📋 **Patient Record Details for Patient `{patient_id}`**:\n\n- **Simulation Mode**: Real-time records fetched from Unity Catalog are simulated here.\n- **Access Policy**: Row-Level Security matches ONLY your user ID."
         
     elif role == "doctor":
-        if doctor_id == "D001":
-            if "pa002" in query_lower:
-                return f"❌ **Access Denied (Doctor-Patient Mapping Policy)**: As Doctor `{doctor_id}`, you are only assigned to Patient `PA001`. Access to Patient `PA002` is restricted. Please contact administrative staff for assignment updates."
-            return f"👨‍⚕️ **Doctor Portal (Dr. Smith)**:\n\nShowing assigned patient **PA001**:\n- **Consult logs**: Routine checkup. Patient reports good response to current inhaler."
-        elif doctor_id == "D002":
-            if "pa001" in query_lower:
-                return f"❌ **Access Denied (Doctor-Patient Mapping Policy)**: As Doctor `{doctor_id}`, you are only assigned to Patient `PA002`. Access to Patient `PA001` is restricted."
-            return f"👨‍⚕️ **Doctor Portal (Dr. Jones)**:\n\nShowing assigned patient **PA002**:\n- **Clinical notes**: Patient reports mild joint pain. Recommendation: Physiotherapy."
+        return f"👨‍⚕️ **Doctor Portal (Doctor ID: `{doctor_id}`)**:\n\n- **Context**: Accessing records under your clinical scope.\n- **Policy**: Row-level filtering limits queries to patients assigned to your Doctor ID."
             
     elif role == "pharmacist":
-        return f"💊 **Pharmacist Access (Pharm. Doe)**:\n\nAuthorized view for Patient records. Checked prescriptions compatibility for Patient `PA001`:\n- **Active Medications**: Albuterol Inhaler (1 puff every 4 hours as needed).\n- **Compatibility**: No drug-drug interactions detected."
+        return f"💊 **Pharmacist Access (Pharmacist ID: `{doctor_id or 'P001'}`)**:\n\n- **Scope**: Authorized view for prescription compatibility review.\n- **Policies**: Row-level visibility active."
         
     elif role == "labtechnician":
         if "diagnosis" in query_lower or "history" in query_lower:
             return f"❌ **Access Denied (Lab Technician Policy)**: Lab technicians are restricted from viewing clinical histories, diagnoses, or consult notes. You are only authorized to view raw laboratory results."
-        return f"🔬 **Lab Report Portal (Lab Tech 1)**:\n\nShowing lab results for Patient `PA001`:\n- **Complete Blood Count (CBC)**: Normal range.\n- **Lipid Panel**: Cholesterol 180 mg/dL (Normal)."
+        return f"🔬 **Lab Report Portal (Lab Technician)**:\n\n- **Scope**: Lab results view only.\n- **Access**: Clinical history fields filtered."
+        
     elif role == "admin":
-        return f"⚡ **Administrator Portal (jeevanmg958)**:\n\nFull database access granted. Active Policy Rules:\n- Row-Level Security: Bypass active.\n- Audit logs active.\n\nAll records retrieved across all patients."
+        return f"⚡ **Administrator Portal**:\n\nFull database access granted. Active Policy Rules:\n- Row-Level Security: Bypass active.\n- Audit logs active.\n\nAll records retrieved across all patients."
+        
     return f"Hello! As a Healthcare Supervisor with role `{role.upper()}`, here is the simulated response for your query: \"{query}\"."
 
 # Helper to fetch active users directly from Databricks Unity Catalog SQL table
@@ -252,30 +248,10 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id):
         st.sidebar.error(f"SQL Error: {str(e)}")
         return None
 
-# Local fallback mock data for testing on localhost
-LOCAL_MOCK_USERS = {
-    "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
-    "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
-    "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
-    "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
-    "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
-    "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
-    "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
-}
-
 # Credentials & Role Validation Function (direct query to Databricks UC)
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
-    use_mock = not host or not token or not warehouse_id
-    if use_mock:
-        clean_id = login_id.strip()
-        if clean_id in LOCAL_MOCK_USERS:
-            user_info = LOCAL_MOCK_USERS[clean_id]
-            if user_info["role"] == login_role:
-                return True, user_info, "Local Simulation Profile"
-            else:
-                return False, f"Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.", ""
-        else:
-            return False, f"Invalid User ID: `{clean_id}` does not exist in local simulation database.", ""
+    if not host or not token or not warehouse_id:
+        return False, "Databricks connection details (host, token, or SQL Warehouse ID) are not configured. Direct database check is required.", ""
             
     try:
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{login_id.strip()}'"
@@ -448,11 +424,12 @@ if not st.session_state.authenticated:
             st.write(f"Detected SSO User: **{headers_email or headers_user}**")
             email_key = (headers_email or headers_user).lower().strip()
             matched_user = None
-            scan_users = USERS_BY_ID if USERS_BY_ID else LOCAL_MOCK_USERS
+            scan_users = USERS_BY_ID
             for u in scan_users.values():
                 if u["email"].lower() == email_key:
                     matched_user = u
                     break
+            
             if matched_user:
                 st.write(f"Mapped Profile: **{matched_user['name']}** ({matched_user['role'].upper()})")
                 if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
