@@ -131,6 +131,29 @@ def get_db_client():
 
 db_client = get_db_client()
 
+# Helper to retrieve headers in Streamlit (with fallback for older versions)
+def get_request_header(header_name):
+    # Try modern st.context API (Streamlit 1.35.0+)
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            val = st.context.headers.get(header_name, "")
+            if val:
+                return val
+    except Exception:
+        pass
+    
+    # Try legacy websocket headers
+    try:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers()
+        if headers:
+            for k, v in headers.items():
+                if k.lower() == header_name.lower():
+                    return v
+    except Exception:
+        pass
+    return ""
+
 # ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT SIMULATOR =================
 st.sidebar.markdown("### 🔐 Identity & Access Management")
 st.sidebar.caption("Simulate the authenticated user session context that is passed to the supervisor agent.")
@@ -189,15 +212,26 @@ with st.sidebar.expander("🔑 Manual Token Override"):
     token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
 
 # Determine credentials to use
+headers_token = get_request_header("x-forwarded-access-token")
+
 db_host = host_override if host_override else (db_client.config.host if db_client else "")
-db_token = token_override if token_override else (db_client.config.token if db_client else "")
+db_token = (
+    token_override if token_override
+    else (headers_token if headers_token
+          else (db_client.config.token if db_client else ""))
+)
 
 if db_host and not db_host.startswith(("http://", "https://")):
     db_host = f"https://{db_host}"
 
 # Connection Status Indicator
 if db_host and db_token:
-    st.sidebar.success("🟢 Databricks Endpoint Connected")
+    if token_override:
+        st.sidebar.success("🟢 Connected (Token Override)")
+    elif headers_token:
+        st.sidebar.success("🟢 Connected (SSO Header)")
+    else:
+        st.sidebar.success("🟢 Connected (Workspace client)")
 else:
     st.sidebar.error("🔴 Databricks Auth Required (Use token override for local testing)")
 
