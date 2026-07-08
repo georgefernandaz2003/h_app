@@ -116,9 +116,47 @@ if "audit_logs" not in st.session_state:
     # Add an initial log
     log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
 
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
 # App Header
-st.markdown('<div class="main-header">Healthcare Supervisor Agent Gateway</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Enforcing Secure Role-Based Access Control (RBAC) & Row-Level Filtering via Databricks Model Serving</div>', unsafe_allow_html=True)
+
+# Login Page UI
+if not st.session_state.authenticated:
+    st.markdown("""
+    <div class="status-card" style="max-width: 500px; margin: 2rem auto; border-radius: 16px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px);">
+        <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
+    """, unsafe_allow_html=True)
+    
+    login_role = st.selectbox(
+        "Select Your Role",
+        ["patient", "doctor", "lab", "admin"],
+        format_func=lambda x: x.upper()
+    )
+    
+    if login_role == "patient":
+        login_id = st.selectbox("Select Patient ID", ["P101", "P102", "P103"])
+    elif login_role == "doctor":
+        login_id = st.selectbox("Select Doctor ID", ["D201", "D202"])
+    elif login_role == "lab":
+        login_id = st.text_input("Enter Lab Specialist ID", value="L301")
+    else:
+        login_id = st.text_input("Enter Administrator ID", value="A401")
+        
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+    
+    if st.button("Sign In to Portal", use_container_width=True):
+        st.session_state.authenticated = True
+        st.session_state.user_role = login_role
+        st.session_state.user_id = login_id
+        log_audit_request(login_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {login_id}")
+        st.success("Successfully logged in!")
+        st.rerun()
+        
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
 
 # Databricks Auth Helper
 @st.cache_resource
@@ -154,50 +192,55 @@ def get_request_header(header_name):
         pass
     return ""
 
-# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT SIMULATOR =================
-st.sidebar.markdown("### 🔐 Identity & Access Management")
-st.sidebar.caption("Simulate the authenticated user session context that is passed to the supervisor agent.")
+# ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT =================
+st.sidebar.markdown("### 🔐 Authenticated Identity")
+role = st.session_state.user_role
+user_id = st.session_state.user_id
 
-role = st.sidebar.selectbox(
-    "Select Role",
-    ["patient", "doctor", "lab", "admin"],
-    format_func=lambda x: x.upper()
-)
-
-# Render badge based on role
 role_badges = {
     "patient": '<span class="badge badge-patient">Patient</span>',
     "doctor": '<span class="badge badge-doctor">Doctor</span>',
     "lab": '<span class="badge badge-lab">Lab Specialist</span>',
     "admin": '<span class="badge badge-admin">Administrator</span>'
 }
-st.sidebar.markdown(f"**Current Context Badge:** {role_badges[role]}", unsafe_allow_html=True)
 
-# Dynamic Inputs based on role
-user_id = st.sidebar.text_input("User ID (Authenticated)", value=f"usr_{role}_88")
+st.sidebar.markdown(f"**Role:** {role_badges[role]}", unsafe_allow_html=True)
+st.sidebar.markdown(f"**User ID:** `{user_id}`")
+
+if st.sidebar.button("🚪 Log Out", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.user_id = None
+    st.session_state.user_role = None
+    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛡️ Active Session Context")
+
 patient_id = ""
 doctor_id = ""
 
 if role == "patient":
-    patient_id = st.sidebar.selectbox("Patient ID", ["P101", "P102", "P103"], index=0)
+    patient_id = user_id
     st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
 elif role == "doctor":
-    doctor_id = st.sidebar.selectbox("Doctor ID", ["D201", "D202"], index=0)
+    doctor_id = user_id
     
-    st.sidebar.markdown("**Simulated Doctor-Patient Mapping Table:**")
+    st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
     mapping_df = pd.DataFrame({
         "Doctor ID": ["D201", "D201", "D202"],
         "Assigned Patient ID": ["P101", "P103", "P102"]
     })
     st.sidebar.table(mapping_df)
     
-    # Active doctor patient mapping display
     assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
+    patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
     st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
 elif role == "lab":
     st.sidebar.info("🔬 Lab role allows access only to lab reports. Diagnosis notes are filtered out.")
 elif role == "admin":
-    st.sidebar.warning("⚡ Admin role has unrestricted access to mappings, users, and all records.")
+    st.sidebar.warning("⚡ Admin has unrestricted access.")
+    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "P101", "P102", "P103"], index=0)
+    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D201", "D202"], index=0)
 
 # Sidebar Endpoint Configuration
 st.sidebar.markdown("---")
