@@ -272,8 +272,76 @@ def fetch_users_from_databricks(catalog, schema, table, warehouse_id, host, toke
             }
     return users_map
 
-# Credentials & Role Validation Function (direct query to Databricks UC)
+# Hardcoded local user database
+HARDCODED_USERS = {
+    "D001": {
+        "role": "doctor",
+        "name": "Dr. Smith",
+        "id": "D001",
+        "patient_id": None,
+        "email": "dr.smith@hospital.com",
+        "doctor_id": "D001"
+    },
+    "D002": {
+        "role": "doctor",
+        "name": "Dr. Jones",
+        "id": "D002",
+        "patient_id": None,
+        "email": "dr.jones@hospital.com",
+        "doctor_id": "D002"
+    },
+    "P001": {
+        "role": "pharmacist",
+        "name": "Pharm. Doe",
+        "id": "P001",
+        "patient_id": None,
+        "email": "pharm.doe@hospital.com",
+        "doctor_id": None
+    },
+    "A001": {
+        "role": "admin",
+        "name": "Admin User",
+        "id": "A001",
+        "patient_id": None,
+        "email": "admin@hospital.com",
+        "doctor_id": None
+    },
+    "L001": {
+        "role": "labtechnician",
+        "name": "Lab Tech 1",
+        "id": "L001",
+        "patient_id": None,
+        "email": "lab.tech1@hospital.com",
+        "doctor_id": None
+    },
+    "PA001": {
+        "role": "patient",
+        "name": "Patient 001",
+        "id": "PA001",
+        "patient_id": None,
+        "email": "patient001@hospital.com",
+        "doctor_id": "D001"
+    },
+    "U001": {
+        "role": "admin",
+        "name": "jeevanmg958",
+        "id": "U001",
+        "patient_id": None,
+        "email": "jeevanmg958@gmail.com",
+        "doctor_id": None
+    }
+}
+
+# Credentials & Role Validation Function (direct query to Databricks UC or Local Hardcoded DB)
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
+    uid_clean = login_id.strip()
+    if uid_clean in HARDCODED_USERS:
+        user_info = HARDCODED_USERS[uid_clean]
+        db_role = user_info.get("role", "").lower().strip()
+        if db_role != login_role.lower().strip():
+            return False, f"Role mismatch: User `{uid_clean}` is registered locally as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
+        return True, user_info, "Local Hardcoded Database"
+
     if not host or not token or not warehouse_id:
         return False, "Databricks connection details (host, token, or SQL Warehouse ID) are not configured. Direct database check is required.", ""
             
@@ -331,8 +399,8 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
-if "users_directory" not in st.session_state:
-    st.session_state.users_directory = {}
+if "users_directory" not in st.session_state or not st.session_state.users_directory:
+    st.session_state.users_directory = HARDCODED_USERS.copy()
 
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
