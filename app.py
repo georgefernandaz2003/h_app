@@ -414,10 +414,17 @@ with col1:
             log_audit_request(user_id, role, query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
         else:
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
-                # Prepare context and payload
+                # Format query content to automatically pass identity and context
+                context_prefix = f"[User Context - Role: {role.upper()} | User ID: {user_id}"
+                if patient_id:
+                    context_prefix += f" | Patient ID: {patient_id}"
+                if doctor_id:
+                    context_prefix += f" | Doctor ID: {doctor_id}"
+                context_prefix += "]\n\n"
+
                 payload = {
                     "input": [
-                        {"role": "user", "content": query}
+                        {"role": "user", "content": f"{context_prefix}{query}"}
                     ],
                     "user_id": user_id,
                     "role": role,
