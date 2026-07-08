@@ -199,6 +199,9 @@ if "audit_logs" not in st.session_state:
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
+if "logged_out" not in st.session_state:
+    st.session_state.logged_out = False
+
 USERS_BY_ID = {
     "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
     "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
@@ -213,7 +216,7 @@ USERS_BY_ID = {
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
 
-if not st.session_state.authenticated and (headers_email or headers_user):
+if not st.session_state.authenticated and not st.session_state.logged_out and (headers_email or headers_user):
     email_key = (headers_email or headers_user).lower().strip()
     matched_user = None
     for u in USERS_BY_ID.values():
@@ -257,6 +260,7 @@ if not st.session_state.authenticated:
         st.session_state.user_id = login_id
         st.session_state.user_info = USERS_BY_ID[login_id]
         st.session_state.auth_source = "Local Credentials"
+        st.session_state.logged_out = False
         log_audit_request(login_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {login_id}")
         st.success("Successfully logged in!")
         st.rerun()
@@ -284,6 +288,7 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.session_state.authenticated = False
     st.session_state.user_id = None
     st.session_state.user_role = None
+    st.session_state.logged_out = True
     st.rerun()
 
 st.sidebar.markdown("---")
