@@ -145,6 +145,51 @@ def get_request_header(header_name):
         pass
     return ""
 
+# Helper to extract readable text response from nested Databricks Agent responses
+def extract_agent_response_text(predictions):
+    if isinstance(predictions, str):
+        return predictions
+        
+    if isinstance(predictions, dict):
+        # Check if it has a nested 'output' list representing agent outputs
+        outputs = predictions.get("output")
+        if isinstance(outputs, list):
+            texts = []
+            for out in outputs:
+                if isinstance(out, dict):
+                    # Check for messages from assistant
+                    if out.get("type") == "message" and out.get("role") == "assistant":
+                        contents = out.get("content")
+                        if isinstance(contents, list):
+                            for block in contents:
+                                if isinstance(block, dict) and block.get("type") == "output_text":
+                                    text_val = block.get("text", "")
+                                    if text_val:
+                                        texts.append(text_val)
+            if texts:
+                return "\n\n".join(texts)
+                
+        # Try finding predictions key
+        if "predictions" in predictions:
+            return extract_agent_response_text(predictions["predictions"])
+            
+        # Try finding text key
+        if "text" in predictions:
+            return str(predictions["text"])
+            
+    if isinstance(predictions, list):
+        if len(predictions) > 0:
+            first = predictions[0]
+            if isinstance(first, dict) and "text" in first:
+                return first["text"]
+            return "\n\n".join([extract_agent_response_text(item) for item in predictions])
+            
+    # Fallback to JSON-formatted dump for fallback readability
+    try:
+        return json.dumps(predictions, indent=2)
+    except Exception:
+        return str(predictions)
+
 # Initialize Session State for audit logs and settings
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -398,11 +443,12 @@ with col1:
                         res_data = response.json()
                         st.success(f"Response Received in {duration_ms}ms")
                         
-                        # Handle potential response formats (MLflow format uses 'predictions' or agent outputs)
+                        # Parse Databricks agent nested response format to extract readable text
                         predictions = res_data.get("predictions", res_data)
+                        extracted_response = extract_agent_response_text(predictions)
                         
                         st.markdown("#### 📝 Agent Response:")
-                        st.info(predictions)
+                        st.info(extracted_response)
                         
                         # Extract outcome for audit log
                         outcome = "SUCCESS"
