@@ -75,7 +75,8 @@ st.markdown("""
     
     .badge-patient { background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; }
     .badge-doctor { background-color: #064e3b; color: #34d399; border: 1px solid #10b981; }
-    .badge-lab { background-color: #701a75; color: #f472b6; border: 1px solid #ec4899; }
+    .badge-pharmacist { background-color: #1e1b4b; color: #a5b4fc; border: 1px solid #6366f1; }
+    .badge-labtechnician { background-color: #701a75; color: #f472b6; border: 1px solid #ec4899; }
     .badge-admin { background-color: #7c2d12; color: #fb923c; border: 1px solid #f97316; }
     
     /* Buttons */
@@ -109,54 +110,6 @@ def log_audit_request(user_id, role, query, status, details=""):
     if "audit_logs" not in st.session_state:
         st.session_state.audit_logs = []
     st.session_state.audit_logs.insert(0, log_entry)
-
-# Initialize Session State for audit logs and settings
-if "audit_logs" not in st.session_state:
-    st.session_state.audit_logs = []
-    # Add an initial log
-    log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
-
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-# App Header
-st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Enforcing Secure Role-Based Access Control (RBAC) & Row-Level Filtering via Databricks Model Serving</div>', unsafe_allow_html=True)
-
-# Login Page UI
-if not st.session_state.authenticated:
-    st.markdown("""
-    <div class="status-card" style="max-width: 500px; margin: 2rem auto; border-radius: 16px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px);">
-        <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
-    """, unsafe_allow_html=True)
-    
-    login_role = st.selectbox(
-        "Select Your Role",
-        ["patient", "doctor", "lab", "admin"],
-        format_func=lambda x: x.upper()
-    )
-    
-    if login_role == "patient":
-        login_id = st.selectbox("Select Patient ID", ["P101", "P102", "P103"])
-    elif login_role == "doctor":
-        login_id = st.selectbox("Select Doctor ID", ["D201", "D202"])
-    elif login_role == "lab":
-        login_id = st.text_input("Enter Lab Specialist ID", value="L301")
-    else:
-        login_id = st.text_input("Enter Administrator ID", value="A401")
-        
-    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-    
-    if st.button("Sign In to Portal", use_container_width=True):
-        st.session_state.authenticated = True
-        st.session_state.user_role = login_role
-        st.session_state.user_id = login_id
-        log_audit_request(login_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {login_id}")
-        st.success("Successfully logged in!")
-        st.rerun()
-        
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.stop()
 
 # Databricks Auth Helper
 @st.cache_resource
@@ -192,6 +145,80 @@ def get_request_header(header_name):
         pass
     return ""
 
+# Initialize Session State for audit logs and settings
+if "audit_logs" not in st.session_state:
+    st.session_state.audit_logs = []
+    # Add an initial log
+    log_audit_request("SYSTEM", "system", "Gateway Initialized", "SUCCESS", "HIPAA-compliant logging active.")
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+USERS_BY_ID = {
+    "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
+    "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
+    "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
+    "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
+    "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
+    "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
+    "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
+}
+
+# Check Databricks App Headers for automatic user logins (SSO)
+headers_email = get_request_header("X-Forwarded-Email")
+headers_user = get_request_header("X-Forwarded-Preferred-Username")
+
+if not st.session_state.authenticated and (headers_email or headers_user):
+    email_key = (headers_email or headers_user).lower().strip()
+    matched_user = None
+    for u in USERS_BY_ID.values():
+        if u["email"].lower() == email_key:
+            matched_user = u
+            break
+    
+    if matched_user:
+        st.session_state.authenticated = True
+        st.session_state.user_role = matched_user["role"]
+        st.session_state.user_id = matched_user["id"]
+        st.session_state.user_info = matched_user
+        st.session_state.auth_source = "Databricks SSO"
+        log_audit_request(matched_user["id"], matched_user["role"], "User Auto-Login", "SUCCESS", f"Auto-logged in via Databricks SSO header email: {headers_email}")
+
+# App Header
+st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Enforcing Secure Role-Based Access Control (RBAC) & Row-Level Filtering via Databricks Model Serving</div>', unsafe_allow_html=True)
+
+# Login Page UI
+if not st.session_state.authenticated:
+    st.markdown("""
+    <div class="status-card" style="max-width: 500px; margin: 2rem auto; border-radius: 16px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px);">
+        <h3 style="text-align: center; color: #fff; margin-bottom: 1.5rem;">🔐 Portal Sign-In</h3>
+    """, unsafe_allow_html=True)
+    
+    login_role = st.selectbox(
+        "Select Your Role",
+        ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
+        format_func=lambda x: x.upper()
+    )
+    
+    role_users = [u["id"] for u in USERS_BY_ID.values() if u["role"] == login_role]
+    login_id = st.selectbox("Select Your User ID", role_users)
+        
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+    
+    if st.button("Sign In to Portal", use_container_width=True):
+        st.session_state.authenticated = True
+        st.session_state.user_role = login_role
+        st.session_state.user_id = login_id
+        st.session_state.user_info = USERS_BY_ID[login_id]
+        st.session_state.auth_source = "Local Credentials"
+        log_audit_request(login_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {login_id}")
+        st.success("Successfully logged in!")
+        st.rerun()
+        
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
 # ================= SIDEBAR: AUTHENTICATION & SECURITY CONTEXT =================
 st.sidebar.markdown("### 🔐 Authenticated Identity")
 role = st.session_state.user_role
@@ -200,7 +227,8 @@ user_id = st.session_state.user_id
 role_badges = {
     "patient": '<span class="badge badge-patient">Patient</span>',
     "doctor": '<span class="badge badge-doctor">Doctor</span>',
-    "lab": '<span class="badge badge-lab">Lab Specialist</span>',
+    "pharmacist": '<span class="badge badge-pharmacist">Pharmacist</span>',
+    "labtechnician": '<span class="badge badge-labtechnician">Lab Technician</span>',
     "admin": '<span class="badge badge-admin">Administrator</span>'
 }
 
@@ -227,20 +255,27 @@ elif role == "doctor":
     
     st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
     mapping_df = pd.DataFrame({
-        "Doctor ID": ["D201", "D201", "D202"],
-        "Assigned Patient ID": ["P101", "P103", "P102"]
+        "Doctor ID": ["D001", "D002"],
+        "Assigned Patient ID": ["PA001", "PA002"]
     })
     st.sidebar.table(mapping_df)
     
     assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
-    patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
-    st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
-elif role == "lab":
-    st.sidebar.info("🔬 Lab role allows access only to lab reports. Diagnosis notes are filtered out.")
+    if assigned:
+        patient_id = st.sidebar.selectbox("Select Patient to Query", assigned)
+        st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
+    else:
+        patient_id = ""
+elif role == "pharmacist":
+    st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
+    patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
+elif role == "labtechnician":
+    st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
+    patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0)
 elif role == "admin":
     st.sidebar.warning("⚡ Admin has unrestricted access.")
-    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "P101", "P102", "P103"], index=0)
-    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D201", "D202"], index=0)
+    patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0)
+    doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0)
 
 # Sidebar Endpoint Configuration
 st.sidebar.markdown("---")
@@ -290,16 +325,20 @@ with col1:
     example_prompts = {
         "patient": [
             f"Show my medical history",
-            f"Show clinical details for patient P102"  # Should fail due to Patient RBAC rules
+            f"Show clinical details for patient PA002"  # Should fail due to Patient RBAC rules
         ],
         "doctor": [
             "Show my patients",
-            "Show medical history for Patient P101",
-            "Show medical history for Patient P102"  # Depends on D201/D202 mapping
+            "Show medical history for Patient PA001",
+            "Show medical history for Patient PA002"  # Depends on mapping
         ],
-        "lab": [
+        "pharmacist": [
+            "Check medication history for Patient PA001",
+            "Check drug compatibility for Patient PA001"
+        ],
+        "labtechnician": [
             "List recent lab reports",
-            "Show diagnosis notes for Patient P101"  # Should be denied to lab role
+            "Show lab reports for Patient PA001"
         ],
         "admin": [
             "Show doctor-patient mappings",
@@ -405,10 +444,21 @@ with col2:
             </ul>
         </div>
         """, unsafe_allow_html=True)
-    elif role == "lab":
+    elif role == "pharmacist":
         st.markdown(f"""
         <div class="status-card">
-            <h5 style="color: #f472b6; margin-top:0;">Lab Policy Rules</h5>
+            <h5 style="color: #a5b4fc; margin-top:0;">Pharmacist Policy Rules</h5>
+            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                <li>Allows viewing medical histories and prescriptions to review compatibility</li>
+                <li>Restricts editing of medical records or billing profiles</li>
+                <li>Audit logged under pharmacist credentials</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    elif role == "labtechnician":
+        st.markdown(f"""
+        <div class="status-card">
+            <h5 style="color: #f472b6; margin-top:0;">Lab Technician Policy Rules</h5>
             <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
                 <li>Allows viewing lab test reports ONLY</li>
                 <li>Removes diagnosis notes, clinical consult logs, and doctor summaries</li>
