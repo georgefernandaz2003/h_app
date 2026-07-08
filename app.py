@@ -473,7 +473,7 @@ else:
 
 # Unity Catalog Table Sync Configuration
 with st.sidebar.expander("🗄️ Databricks Table Sync"):
-    sync_catalog = st.text_input("Catalog", value="main")
+    sync_catalog = st.text_input("Catalog", value="aienterprise")
     sync_schema = st.text_input("Schema", value="default")
     sync_table = st.text_input("Table", value="users")
     sync_warehouse = st.text_input("SQL Warehouse ID", placeholder="e.g. 1a2b3c4d5e6f7g8h", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
