@@ -291,6 +291,10 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
     st.session_state.logged_out = True
     st.rerun()
 
+if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
+    st.session_state.chat_history = []
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛡️ Active Session Context")
 
@@ -370,8 +374,9 @@ with col1:
     st.markdown("### 💬 Ask Supervisor Agent")
     st.caption("Submit queries. The gateway automatically injects row-level filters and role context.")
     
-    # Quick Examples based on selected role
-    st.markdown("**Quick Examples:**")
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+        
     example_prompts = {
         "patient": [
             f"Show my medical history",
@@ -395,24 +400,40 @@ with col1:
             "Show all medical records across all patients"
         ]
     }
-    
-    # Dynamic buttons for examples
-    example_cols = st.columns(len(example_prompts[role]))
-    selected_example = None
-    for idx, ex in enumerate(example_prompts[role]):
-        if example_cols[idx].button(ex, key=f"ex_{idx}"):
-            selected_example = ex
-            
-    # Main Query Text Input
-    default_text = selected_example if selected_example else example_prompts[role][0]
-    query = st.text_area("Your Question / Command", value=default_text, height=100)
-    
-    # Submit Request
-    if st.button("Send Request to Serving Endpoint", use_container_width=True):
+        
+    # Render chat history container
+    chat_container = st.container()
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if "caption" in msg:
+                    st.caption(msg["caption"])
+                    
+    # Render quick examples if history is empty
+    clicked_prompt = None
+    if not st.session_state.chat_history:
+        st.markdown("**Quick Examples:**")
+        example_cols = st.columns(len(example_prompts[role]))
+        for idx, ex in enumerate(example_prompts[role]):
+            if example_cols[idx].button(ex, key=f"ex_{idx}"):
+                clicked_prompt = ex
+
+    # Main chat input at the bottom
+    user_query = st.chat_input("Ask the Healthcare Supervisor...")
+    active_query = user_query if user_query else clicked_prompt
+
+    if active_query:
         if not db_host or not db_token:
             st.error("Please configure Databricks authentication details in the sidebar to send requests.")
-            log_audit_request(user_id, role, query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
+            log_audit_request(user_id, role, active_query, "FAILED_AUTH", "Missing Databricks host/token credentials.")
         else:
+            # Append user message
+            st.session_state.chat_history.append({"role": "user", "content": active_query})
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(active_query)
+                    
             with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
                 # Format query content to automatically pass identity and context
                 context_prefix = f"[User Context - Role: {role.upper()} | User ID: {user_id}"
@@ -424,7 +445,7 @@ with col1:
 
                 payload = {
                     "input": [
-                        {"role": "user", "content": f"{context_prefix}{query}"}
+                        {"role": "user", "content": f"{context_prefix}{active_query}"}
                     ],
                     "user_id": user_id,
                     "role": role,
@@ -447,33 +468,32 @@ with col1:
                 
                 start_time = datetime.now()
                 try:
-                    # Execute API request to serving endpoint
                     response = requests.post(url, json=payload, headers=headers, timeout=120)
                     duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
                     
                     if response.status_code == 200:
                         res_data = response.json()
-                        st.success(f"Response Received in {duration_ms}ms")
-                        
-                        # Parse Databricks agent nested response format to extract readable text
                         predictions = res_data.get("predictions", res_data)
                         extracted_response = extract_agent_response_text(predictions)
                         
-                        st.markdown("#### 📝 Agent Response:")
-                        st.info(extracted_response)
-                        
-                        # Extract outcome for audit log
-                        outcome = "SUCCESS"
-                        details = f"HTTP 200 | Latency: {duration_ms}ms"
-                        log_audit_request(user_id, role, query, outcome, details)
+                        # Save assistant response
+                        st.session_state.chat_history.append({
+                            "role": "assistant", 
+                            "content": extracted_response,
+                            "caption": f"⚡ *Response received in {duration_ms}ms*"
+                        })
+                        log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
+                        st.rerun()
                     else:
-                        st.error(f"Endpoint Error (HTTP {response.status_code})")
-                        st.code(response.text)
-                        log_audit_request(user_id, role, query, f"ERROR_{response.status_code}", response.text)
-                        
+                        error_msg = f"**Endpoint Error (HTTP {response.status_code})**\n```json\n{response.text}\n```"
+                        st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                        log_audit_request(user_id, role, active_query, f"ERROR_{response.status_code}", response.text)
+                        st.rerun()
                 except Exception as e:
-                    st.error(f"Failed to connect to endpoint: {str(e)}")
-                    log_audit_request(user_id, role, query, "CONNECTION_ERROR", str(e))
+                    error_msg = f"**Connection Error:** {str(e)}"
+                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                    log_audit_request(user_id, role, active_query, "CONNECTION_ERROR", str(e))
+                    st.rerun()
 
 with col2:
     st.markdown("### 🛡️ Active Security Policy")
