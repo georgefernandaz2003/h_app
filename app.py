@@ -271,16 +271,8 @@ if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
 
 if "users_directory" not in st.session_state:
-    # Hardcoded default fallback map
-    st.session_state.users_directory = {
-        "D001": {"role": "doctor", "name": "Dr. Smith", "id": "D001", "doctor_id": "D001", "email": "dr.smith@hospital.com"},
-        "D002": {"role": "doctor", "name": "Dr. Jones", "id": "D002", "doctor_id": "D002", "email": "dr.jones@hospital.com"},
-        "P001": {"role": "pharmacist", "name": "Pharm. Doe", "id": "P001", "email": "pharm.doe@hospital.com"},
-        "A001": {"role": "admin", "name": "Admin User", "id": "A001", "email": "admin@hospital.com"},
-        "L001": {"role": "labtechnician", "name": "Lab Tech 1", "id": "L001", "email": "lab.tech1@hospital.com"},
-        "PA001": {"role": "patient", "name": "Patient 001", "id": "PA001", "patient_id": "PA001", "email": "patient001@hospital.com", "doctor_id": "D001"},
-        "U001": {"role": "admin", "name": "jeevanmg958", "id": "U001", "email": "jeevanmg958@gmail.com"}
-    }
+    # Initialize empty directory. Must be populated from Databricks Unity Catalog SQL table.
+    st.session_state.users_directory = {}
 
 USERS_BY_ID = st.session_state.users_directory
 
@@ -304,41 +296,45 @@ if not st.session_state.authenticated:
     login_tab1, login_tab2 = st.tabs(["👤 Select Identity", "🌐 Databricks SSO"])
     
     with login_tab1:
-        login_role = st.selectbox(
-            "Select Your Role",
-            ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
-            format_func=lambda x: x.upper()
-        )
-        
-        # User ID text input for user control
-        default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
-        login_id = st.text_input("Enter Your User ID", value=default_id_val)
-        
-        st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-        
-        if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
-            clean_id = login_id.strip()
+        if not USERS_BY_ID:
+            st.warning("⚠️ No user profiles loaded in local directory.")
+            st.info("💡 Please configure your credentials and warehouse details, then click **Sync Users Table** in the sidebar settings to load the directory from Unity Catalog.")
+        else:
+            login_role = st.selectbox(
+                "Select Your Role",
+                ["patient", "doctor", "pharmacist", "labtechnician", "admin"],
+                format_func=lambda x: x.upper()
+            )
             
-            # Validate credentials against the backend user database
-            if clean_id in USERS_BY_ID:
-                user_info = USERS_BY_ID[clean_id]
-                # Check if selected role matches database role
-                if user_info["role"] == login_role:
-                    st.session_state.authenticated = True
-                    st.session_state.user_role = login_role
-                    st.session_state.user_id = clean_id
-                    st.session_state.user_info = user_info
-                    st.session_state.auth_source = "Local Credentials"
-                    st.session_state.logged_out = False
-                    log_audit_request(clean_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {clean_id}")
-                    st.success("Successfully logged in!")
-                    st.rerun()
+            # User ID text input for user control
+            default_id_val = "PA001" if login_role == "patient" else "D001" if login_role == "doctor" else "P001" if login_role == "pharmacist" else "L001" if login_role == "labtechnician" else "A001"
+            login_id = st.text_input("Enter Your User ID", value=default_id_val)
+            
+            st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+            
+            if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
+                clean_id = login_id.strip()
+                
+                # Validate credentials against the backend user database
+                if clean_id in USERS_BY_ID:
+                    user_info = USERS_BY_ID[clean_id]
+                    # Check if selected role matches database role
+                    if user_info["role"] == login_role:
+                        st.session_state.authenticated = True
+                        st.session_state.user_role = login_role
+                        st.session_state.user_id = clean_id
+                        st.session_state.user_info = user_info
+                        st.session_state.auth_source = "Local Credentials"
+                        st.session_state.logged_out = False
+                        log_audit_request(clean_id, login_role, "User Sign-In", "SUCCESS", f"Authenticated as {login_role.upper()} ID: {clean_id}")
+                        st.success("Successfully logged in!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.")
+                        log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_ROLE_MISMATCH", f"Tried to sign in as {login_role.upper()}")
                 else:
-                    st.error(f"❌ Role mismatch: User ID `{clean_id}` is registered as `{user_info['role'].upper()}`, not `{login_role.upper()}`.")
-                    log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_ROLE_MISMATCH", f"Tried to sign in as {login_role.upper()}")
-            else:
-                st.error("❌ Invalid User ID: The entered ID does not exist in the portal database.")
-                log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_INVALID_ID", "ID not found in database.")
+                    st.error("❌ Invalid User ID: The entered ID does not exist in the portal database.")
+                    log_audit_request(clean_id, login_role, "User Sign-In", "FAILED_INVALID_ID", "ID not found in database.")
             
     with login_tab2:
         if headers_email or headers_user:
