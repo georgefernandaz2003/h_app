@@ -187,6 +187,33 @@ def extract_agent_response_text(predictions):
             return str(predictions["text"])
             
     if isinstance(predictions, list):
+        # Check if it looks like a list of streaming deltas
+        is_delta_stream = False
+        texts = []
+        for item in predictions:
+            if isinstance(item, dict):
+                # Check for OpenAI delta stream format
+                if "choices" in item and isinstance(item["choices"], list) and len(item["choices"]) > 0:
+                    choice = item["choices"][0]
+                    if isinstance(choice, dict) and ("delta" in choice or "text" in choice):
+                        is_delta_stream = True
+                        delta = choice.get("delta")
+                        if isinstance(delta, dict) and "content" in delta:
+                            texts.append(delta["content"])
+                        elif "text" in choice:
+                            texts.append(choice["text"])
+                # Check for MLflow delta stream format
+                elif "type" in item and ("text" in item or "text_delta" in item or "delta" in item):
+                    is_delta_stream = True
+                    if "text_delta" in item:
+                        texts.append(item["text_delta"])
+                    elif "text" in item:
+                        texts.append(item["text"])
+                    elif "delta" in item:
+                        texts.append(item["delta"])
+        if is_delta_stream:
+            return "".join(texts)
+
         if len(predictions) > 0:
             first = predictions[0]
             if isinstance(first, dict) and "text" in first:
@@ -198,6 +225,52 @@ def extract_agent_response_text(predictions):
         return json.dumps(predictions, indent=2)
     except Exception:
         return str(predictions)
+
+# Parses either a standard single JSON response or Server-Sent Events (SSE) stream text
+def parse_sse_or_json(response_text):
+    # Try parsing as a single JSON first
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        pass
+        
+    # If not valid JSON, check if it's SSE format
+    lines = response_text.strip().split("\n")
+    data_chunks = []
+    has_sse = False
+    error_info = None
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("event:"):
+            has_sse = True
+            event_type = line[6:].strip()
+            if event_type == "error":
+                # Marked as error event
+                pass
+        elif line.startswith("data:"):
+            has_sse = True
+            data_val = line[5:].strip()
+            if data_val == "[DONE]":
+                continue
+            try:
+                chunk_json = json.loads(data_val)
+                if "error_code" in chunk_json or "error" in chunk_json:
+                    error_info = chunk_json
+                else:
+                    data_chunks.append(chunk_json)
+            except json.JSONDecodeError:
+                data_chunks.append(data_val)
+                
+    if has_sse:
+        if error_info:
+            error_msg = error_info.get("message", json.dumps(error_info))
+            raise ValueError(error_msg)
+        return data_chunks
+        
+    raise ValueError("Response is not valid JSON and does not conform to SSE stream format.")
 
 # Local Simulation Agent Response Generator (for localhost testing without Databricks Token)
 def get_mock_agent_response(query, role, patient_id, doctor_id):
@@ -589,8 +662,11 @@ with col1:
                         try:
                             if not response.text.strip():
                                 raise ValueError("Empty response body received from the serving endpoint.")
-                            res_data = response.json()
-                            predictions = res_data.get("predictions", res_data)
+                            res_data = parse_sse_or_json(response.text)
+                            if isinstance(res_data, dict):
+                                predictions = res_data.get("predictions", res_data)
+                            else:
+                                predictions = res_data
                             extracted_response = extract_agent_response_text(predictions)
                             
                             # Save assistant response
@@ -602,17 +678,30 @@ with col1:
                             log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
                             st.rerun()
                         except Exception as parse_err:
+                            err_str = str(parse_err)
                             content_type = response.headers.get("Content-Type", "unknown")
                             error_preview = response.text[:1000] if response.text else "(No content)"
-                            error_msg = (
-                                f"**JSON Parsing Error:** The endpoint returned status code `200 OK`, "
-                                f"but the response body could not be parsed as JSON.\n\n"
-                                f"**Error Details:** `{str(parse_err)}`\n"
-                                f"**Content-Type:** `{content_type}`\n\n"
-                                f"**Response Preview:**\n```html\n{error_preview}\n```"
-                            )
+                            
+                            if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
+                                error_msg = (
+                                    f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
+                                    f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
+                                    f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
+                                    f"**Active Token Scopes:** `{err_str}`\n\n"
+                                    f"### 💡 How to Resolve:\n"
+                                    f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
+                                    f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
+                                )
+                            else:
+                                error_msg = (
+                                    f"**JSON/SSE Parsing Error:** The endpoint returned status code `200 OK`, "
+                                    f"but the response body could not be parsed correctly.\n\n"
+                                    f"**Error Details:** `{err_str}`\n"
+                                    f"**Content-Type:** `{content_type}`\n\n"
+                                    f"**Response Preview:**\n```html\n{error_preview}\n```"
+                                )
                             st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                            log_audit_request(user_id, role, active_query, "JSON_DECODE_ERROR", f"Content-Type: {content_type} | Error: {str(parse_err)}")
+                            log_audit_request(user_id, role, active_query, "JSON_DECODE_ERROR", f"Content-Type: {content_type} | Error: {err_str}")
                             st.rerun()
                     else:
                         error_msg = f"**Endpoint Error (HTTP {response.status_code})**\n```json\n{response.text}\n```"
@@ -620,9 +709,21 @@ with col1:
                         log_audit_request(user_id, role, active_query, f"ERROR_{response.status_code}", response.text)
                         st.rerun()
                 except Exception as e:
-                    error_msg = f"**Connection Error:** {str(e)}"
+                    err_str = str(e)
+                    if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
+                        error_msg = (
+                            f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
+                            f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
+                            f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
+                            f"**Active Token Scopes:** `{err_str}`\n\n"
+                            f"### 💡 How to Resolve:\n"
+                            f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
+                            f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
+                        )
+                    else:
+                        error_msg = f"**Connection Error:** {err_str}"
                     st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                    log_audit_request(user_id, role, active_query, "CONNECTION_ERROR", str(e))
+                    log_audit_request(user_id, role, active_query, "CONNECTION_ERROR", err_str)
                     st.rerun()
 
 with col2:
