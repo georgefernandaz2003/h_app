@@ -586,18 +586,34 @@ with col1:
                     duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
                     
                     if response.status_code == 200:
-                        res_data = response.json()
-                        predictions = res_data.get("predictions", res_data)
-                        extracted_response = extract_agent_response_text(predictions)
-                        
-                        # Save assistant response
-                        st.session_state.chat_history.append({
-                            "role": "assistant", 
-                            "content": extracted_response,
-                            "caption": f"⚡ *Response received in {duration_ms}ms*"
-                        })
-                        log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
-                        st.rerun()
+                        try:
+                            if not response.text.strip():
+                                raise ValueError("Empty response body received from the serving endpoint.")
+                            res_data = response.json()
+                            predictions = res_data.get("predictions", res_data)
+                            extracted_response = extract_agent_response_text(predictions)
+                            
+                            # Save assistant response
+                            st.session_state.chat_history.append({
+                                "role": "assistant", 
+                                "content": extracted_response,
+                                "caption": f"⚡ *Response received in {duration_ms}ms*"
+                            })
+                            log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
+                            st.rerun()
+                        except Exception as parse_err:
+                            content_type = response.headers.get("Content-Type", "unknown")
+                            error_preview = response.text[:1000] if response.text else "(No content)"
+                            error_msg = (
+                                f"**JSON Parsing Error:** The endpoint returned status code `200 OK`, "
+                                f"but the response body could not be parsed as JSON.\n\n"
+                                f"**Error Details:** `{str(parse_err)}`\n"
+                                f"**Content-Type:** `{content_type}`\n\n"
+                                f"**Response Preview:**\n```html\n{error_preview}\n```"
+                            )
+                            st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                            log_audit_request(user_id, role, active_query, "JSON_DECODE_ERROR", f"Content-Type: {content_type} | Error: {str(parse_err)}")
+                            st.rerun()
                     else:
                         error_msg = f"**Endpoint Error (HTTP {response.status_code})**\n```json\n{response.text}\n```"
                         st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
