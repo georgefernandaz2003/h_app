@@ -246,50 +246,75 @@ def get_automatic_warehouse_id(client):
     except Exception:
         return None
 
+def execute_statement_with_fallback(sql, catalog, schema, table, warehouse_id, host, token):
+    primary_client = get_db_client()
+    has_sso = bool(get_request_header("x-forwarded-access-token"))
+    user_token = get_request_header("x-forwarded-access-token")
+    
+    fallback_client = None
+    if has_sso:
+        fallback_client = get_db_client(host=host, token=user_token)
+    elif host and token:
+        fallback_client = get_db_client(host=host, token=token)
+        
+    wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+    
+    client_attempts = []
+    if primary_client:
+        client_attempts.append((primary_client, "Service Principal"))
+    if fallback_client:
+        client_attempts.append((fallback_client, "User Access Token"))
+        
+    if not client_attempts:
+        raise ValueError("No valid Databricks clients could be initialized.")
+        
+    last_error = None
+    for client, client_name in client_attempts:
+        try:
+            active_wh = wh_id
+            if not active_wh:
+                active_wh = get_automatic_warehouse_id(client)
+            if not active_wh:
+                raise ValueError(f"SQL Warehouse ID is missing for client {client_name}")
+                
+            res = client.statement_execution.execute_statement(
+                warehouse_id=active_wh,
+                statement=sql
+            )
+            
+            # Poll statement status
+            statement_id = res.statement_id
+            state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+            start_poll = time.time()
+            while state in ["PENDING", "RUNNING"]:
+                if time.time() - start_poll > 30:
+                    raise TimeoutError("Databricks database query timed out.")
+                time.sleep(1)
+                poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+                state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+                res = poll_res
+                
+            if state == "FAILED":
+                error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
+                raise ValueError(f"SQL State {state}: {error_msg}")
+                
+            return res, client_name, active_wh
+        except Exception as e:
+            last_error = e
+            continue
+            
+    raise last_error
+
 # Credentials & Role Validation Function via Databricks table
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
     try:
-        # Service Principal / App client checks the user credentials database.
-        # On localhost without headers, use the manual overrides if provided.
-        has_sso = bool(get_request_header("x-forwarded-access-token"))
-        if host and token and not has_sso:
-            client = get_db_client(host, token)
-        else:
-            client = get_db_client() # Will authenticate as Service Principal using environment vars/unified auth
-            
-        if not client:
-            return False, "Failed to initialize Databricks Workspace client.", ""
-            
-        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
-        if not wh_id:
-            wh_id = get_automatic_warehouse_id(client)
-            if not wh_id:
-                return False, "SQL Warehouse ID is missing and auto-detection failed. Please configure it in the sidebar settings.", ""
-            
         uid_clean = login_id.strip()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{uid_clean}' OR LOWER(email) = '{uid_clean.lower()}'"
         
-        res = client.statement_execution.execute_statement(
-            warehouse_id=wh_id,
-            statement=sql
+        res, auth_source, _ = execute_statement_with_fallback(
+            sql, catalog, schema, table, warehouse_id, host, token
         )
         
-        # Poll statement status
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        start_poll = time.time()
-        while state in ["PENDING", "RUNNING"]:
-            if time.time() - start_poll > 30:
-                return False, "Databricks database query timed out.", ""
-            time.sleep(1)
-            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
-            res = poll_res
-            
-        if state == "FAILED":
-            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
-            return False, f"Databricks SQL query failed: {error_msg}", ""
-            
         if not res.result or not res.result.data_array:
             return False, f"User '{login_id}' not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
             
@@ -309,53 +334,19 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
             "email": record.get("email", ""),
             "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
         }
-        return True, user_info, "Databricks Unity Catalog"
+        return True, user_info, f"Databricks table ({auth_source})"
     except Exception as e:
         return False, f"Databricks table query error: {str(e)}", ""
 
 def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, host, token):
     try:
-        # Service Principal / App client checks the user credentials database.
-        # On localhost without headers, use the manual overrides if provided.
-        has_sso = bool(get_request_header("x-forwarded-access-token"))
-        if host and token and not has_sso:
-            client = get_db_client(host, token)
-        else:
-            client = get_db_client() # Will authenticate as Service Principal using environment vars/unified auth
-            
-        if not client:
-            return False, "Failed to initialize Databricks Workspace client.", ""
-            
-        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
-        if not wh_id:
-            wh_id = get_automatic_warehouse_id(client)
-            if not wh_id:
-                return False, "SQL Warehouse ID is missing and auto-detection failed. Please configure it in the sidebar settings.", ""
-            
         email_clean = email.strip().lower()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE LOWER(email) = '{email_clean}'"
         
-        res = client.statement_execution.execute_statement(
-            warehouse_id=wh_id,
-            statement=sql
+        res, auth_source, _ = execute_statement_with_fallback(
+            sql, catalog, schema, table, warehouse_id, host, token
         )
         
-        # Poll statement status
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        start_poll = time.time()
-        while state in ["PENDING", "RUNNING"]:
-            if time.time() - start_poll > 30:
-                return False, "Databricks database query timed out.", ""
-            time.sleep(1)
-            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
-            res = poll_res
-            
-        if state == "FAILED":
-            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
-            return False, f"Databricks SQL query failed: {error_msg}", ""
-            
         if not res.result or not res.result.data_array:
             return False, f"Email '{email}' not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
             
@@ -372,129 +363,42 @@ def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, h
             "email": record.get("email", ""),
             "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
         }
-        return True, user_info, "Databricks Unity Catalog"
+        return True, user_info, f"Databricks table ({auth_source})"
     except Exception as e:
         return False, f"Databricks table query error: {str(e)}", ""
 
 def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, host, token):
     try:
-        has_sso = bool(get_request_header("x-forwarded-access-token"))
-        if host and token and not has_sso:
-            client = get_db_client(host, token)
-        else:
-            client = get_db_client()
-            
-        if not client:
-            return []
-            
-        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
-        if not wh_id:
-            wh_id = get_automatic_warehouse_id(client)
-            if not wh_id:
-                return []
-            
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE doctor_id = '{doctor_id.strip()}' AND role = 'patient'"
-        res = client.statement_execution.execute_statement(
-            warehouse_id=wh_id,
-            statement=sql
+        res, _, _ = execute_statement_with_fallback(
+            sql, catalog, schema, table, warehouse_id, host, token
         )
-        
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        start_poll = time.time()
-        while state in ["PENDING", "RUNNING"]:
-            if time.time() - start_poll > 10:
-                return []
-            time.sleep(1)
-            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
-            res = poll_res
-            
-        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+        if not res.result or not res.result.data_array:
             return []
-            
         return [row[0] for row in res.result.data_array]
     except Exception:
         return []
 
 def fetch_all_patients(catalog, schema, table, warehouse_id, host, token):
     try:
-        has_sso = bool(get_request_header("x-forwarded-access-token"))
-        if host and token and not has_sso:
-            client = get_db_client(host, token)
-        else:
-            client = get_db_client()
-            
-        if not client:
-            return []
-            
-        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
-        if not wh_id:
-            wh_id = get_automatic_warehouse_id(client)
-            if not wh_id:
-                return []
-            
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'patient'"
-        res = client.statement_execution.execute_statement(
-            warehouse_id=wh_id,
-            statement=sql
+        res, _, _ = execute_statement_with_fallback(
+            sql, catalog, schema, table, warehouse_id, host, token
         )
-        
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        start_poll = time.time()
-        while state in ["PENDING", "RUNNING"]:
-            if time.time() - start_poll > 10:
-                return []
-            time.sleep(1)
-            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
-            res = poll_res
-            
-        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+        if not res.result or not res.result.data_array:
             return []
-            
         return [row[0] for row in res.result.data_array]
     except Exception:
         return []
 
 def fetch_all_doctors(catalog, schema, table, warehouse_id, host, token):
     try:
-        has_sso = bool(get_request_header("x-forwarded-access-token"))
-        if host and token and not has_sso:
-            client = get_db_client(host, token)
-        else:
-            client = get_db_client()
-            
-        if not client:
-            return []
-            
-        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
-        if not wh_id:
-            wh_id = get_automatic_warehouse_id(client)
-            if not wh_id:
-                return []
-            
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'doctor'"
-        res = client.statement_execution.execute_statement(
-            warehouse_id=wh_id,
-            statement=sql
+        res, _, _ = execute_statement_with_fallback(
+            sql, catalog, schema, table, warehouse_id, host, token
         )
-        
-        statement_id = res.statement_id
-        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
-        start_poll = time.time()
-        while state in ["PENDING", "RUNNING"]:
-            if time.time() - start_poll > 10:
-                return []
-            time.sleep(1)
-            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
-            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
-            res = poll_res
-            
-        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+        if not res.result or not res.result.data_array:
             return []
-            
         return [row[0] for row in res.result.data_array]
     except Exception:
         return []
