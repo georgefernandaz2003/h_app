@@ -332,6 +332,16 @@ def execute_statement_with_fallback(sql, catalog, schema, table, warehouse_id, h
 
 # Credentials & Role Validation Function via Databricks table
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
+    if st.session_state.get("bypass_auth", False):
+        user_info = {
+            "role": login_role.lower().strip(),
+            "name": f"Mock {login_role.title()}",
+            "id": login_id.strip() if login_id else "U001",
+            "patient_id": "PA001",
+            "email": f"{login_role.lower()}@example.com",
+            "doctor_id": "D001"
+        }
+        return True, user_info, "Local Offline Mock"
     try:
         uid_clean = login_id.strip()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{uid_clean}' OR LOWER(email) = '{uid_clean.lower()}'"
@@ -365,6 +375,16 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         return False, err_msg, ""
 
 def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, host, token):
+    if st.session_state.get("bypass_auth", False):
+        user_info = {
+            "role": "admin",
+            "name": "Mock Admin",
+            "id": "U001",
+            "patient_id": "PA001",
+            "email": email,
+            "doctor_id": "D001"
+        }
+        return True, user_info, "Local Offline Mock"
     try:
         email_clean = email.strip().lower()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE LOWER(email) = '{email_clean}'"
@@ -395,6 +415,8 @@ def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, h
         return False, err_msg, ""
 
 def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, host, token):
+    if st.session_state.get("bypass_auth", False):
+        return ["PA001", "PA002"]
     try:
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE doctor_id = '{doctor_id.strip()}' AND role = 'patient'"
         res, _, _ = execute_statement_with_fallback(
@@ -407,6 +429,8 @@ def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, h
         return []
 
 def fetch_all_patients(catalog, schema, table, warehouse_id, host, token):
+    if st.session_state.get("bypass_auth", False):
+        return ["PA001", "PA002"]
     try:
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'patient'"
         res, _, _ = execute_statement_with_fallback(
@@ -419,6 +443,8 @@ def fetch_all_patients(catalog, schema, table, warehouse_id, host, token):
         return []
 
 def fetch_all_doctors(catalog, schema, table, warehouse_id, host, token):
+    if st.session_state.get("bypass_auth", False):
+        return ["D001", "D002"]
     try:
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'doctor'"
         res, _, _ = execute_statement_with_fallback(
@@ -457,6 +483,7 @@ with st.sidebar.expander("🗄️ Databricks Table Settings"):
     sync_schema = st.text_input("Schema", value="default")
     sync_table = st.text_input("Table", value="users")
     sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
+    bypass_auth = st.checkbox("Bypass UC Table Auth (Offline Mock Mode)", value=False, key="bypass_auth")
 
 db_host = host_override if host_override else (default_client.config.host if default_client else os.environ.get("DATABRICKS_HOST", ""))
 db_token = (
@@ -469,7 +496,7 @@ if db_host and not db_host.startswith(("http://", "https://")):
     db_host = f"https://{db_host}"
 
 # Auto-SSO login flow
-if not st.session_state.authenticated and not st.session_state.logged_out:
+if not st.session_state.authenticated and not st.session_state.logged_out and not st.session_state.get("bypass_auth", False):
     sso_email = headers_email or headers_user
     if sso_email:
         # Check if warehouse is configured before attempting auto-login
