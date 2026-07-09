@@ -230,21 +230,27 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 # Credentials & Role Validation Function via Databricks table
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
-    if not host or not token:
-        return False, "Databricks connection URL or Access Token is missing. Please configure them in the sidebar expander.", ""
-    if not warehouse_id:
-        return False, "SQL Warehouse ID is missing. Please configure it in the sidebar expander.", ""
-        
     try:
-        client = get_db_client(host, token)
+        # Service Principal / App client checks the user credentials database.
+        # On localhost without headers, use the manual overrides if provided.
+        has_sso = bool(get_request_header("x-forwarded-access-token"))
+        if host and token and not has_sso:
+            client = get_db_client(host, token)
+        else:
+            client = get_db_client() # Will authenticate as Service Principal using environment vars/unified auth
+            
         if not client:
             return False, "Failed to initialize Databricks Workspace client.", ""
+            
+        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+        if not wh_id:
+            return False, "SQL Warehouse ID is missing. Please configure it in the sidebar settings.", ""
             
         uid_clean = login_id.strip()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{uid_clean}' OR LOWER(email) = '{uid_clean.lower()}'"
         
         res = client.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
+            warehouse_id=wh_id,
             statement=sql
         )
         
@@ -288,21 +294,27 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         return False, f"Databricks table query error: {str(e)}", ""
 
 def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, host, token):
-    if not host or not token:
-        return False, "Databricks connection URL or Access Token is missing. Please configure them in the sidebar expander.", ""
-    if not warehouse_id:
-        return False, "SQL Warehouse ID is missing. Please configure it in the sidebar expander.", ""
-        
     try:
-        client = get_db_client(host, token)
+        # Service Principal / App client checks the user credentials database.
+        # On localhost without headers, use the manual overrides if provided.
+        has_sso = bool(get_request_header("x-forwarded-access-token"))
+        if host and token and not has_sso:
+            client = get_db_client(host, token)
+        else:
+            client = get_db_client() # Will authenticate as Service Principal using environment vars/unified auth
+            
         if not client:
             return False, "Failed to initialize Databricks Workspace client.", ""
+            
+        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+        if not wh_id:
+            return False, "SQL Warehouse ID is missing. Please configure it in the sidebar settings.", ""
             
         email_clean = email.strip().lower()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE LOWER(email) = '{email_clean}'"
         
         res = client.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
+            warehouse_id=wh_id,
             statement=sql
         )
         
