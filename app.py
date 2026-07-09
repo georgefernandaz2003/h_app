@@ -354,6 +354,123 @@ def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, h
     except Exception as e:
         return False, f"Databricks table query error: {str(e)}", ""
 
+def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, host, token):
+    try:
+        has_sso = bool(get_request_header("x-forwarded-access-token"))
+        if host and token and not has_sso:
+            client = get_db_client(host, token)
+        else:
+            client = get_db_client()
+            
+        if not client:
+            return []
+            
+        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+        if not wh_id:
+            return []
+            
+        sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE doctor_id = '{doctor_id.strip()}' AND role = 'patient'"
+        res = client.statement_execution.execute_statement(
+            warehouse_id=wh_id,
+            statement=sql
+        )
+        
+        statement_id = res.statement_id
+        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        start_poll = time.time()
+        while state in ["PENDING", "RUNNING"]:
+            if time.time() - start_poll > 10:
+                return []
+            time.sleep(1)
+            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+            res = poll_res
+            
+        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+            return []
+            
+        return [row[0] for row in res.result.data_array]
+    except Exception:
+        return []
+
+def fetch_all_patients(catalog, schema, table, warehouse_id, host, token):
+    try:
+        has_sso = bool(get_request_header("x-forwarded-access-token"))
+        if host and token and not has_sso:
+            client = get_db_client(host, token)
+        else:
+            client = get_db_client()
+            
+        if not client:
+            return []
+            
+        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+        if not wh_id:
+            return []
+            
+        sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'patient'"
+        res = client.statement_execution.execute_statement(
+            warehouse_id=wh_id,
+            statement=sql
+        )
+        
+        statement_id = res.statement_id
+        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        start_poll = time.time()
+        while state in ["PENDING", "RUNNING"]:
+            if time.time() - start_poll > 10:
+                return []
+            time.sleep(1)
+            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+            res = poll_res
+            
+        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+            return []
+            
+        return [row[0] for row in res.result.data_array]
+    except Exception:
+        return []
+
+def fetch_all_doctors(catalog, schema, table, warehouse_id, host, token):
+    try:
+        has_sso = bool(get_request_header("x-forwarded-access-token"))
+        if host and token and not has_sso:
+            client = get_db_client(host, token)
+        else:
+            client = get_db_client()
+            
+        if not client:
+            return []
+            
+        wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
+        if not wh_id:
+            return []
+            
+        sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'doctor'"
+        res = client.statement_execution.execute_statement(
+            warehouse_id=wh_id,
+            statement=sql
+        )
+        
+        statement_id = res.statement_id
+        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        start_poll = time.time()
+        while state in ["PENDING", "RUNNING"]:
+            if time.time() - start_poll > 10:
+                return []
+            time.sleep(1)
+            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+            res = poll_res
+            
+        if state != "SUCCEEDED" or not res.result or not res.result.data_array:
+            return []
+            
+        return [row[0] for row in res.result.data_array]
+    except Exception:
+        return []
+
 # Initialize Session State
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -463,26 +580,43 @@ if st.session_state.authenticated:
     doctor_id = ""
     if role == "patient":
         patient_id = user_id
+        user_info = st.session_state.get("user_info")
+        doctor_id = user_info.get("doctor_id") if user_info else ""
         st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
     elif role == "doctor":
         doctor_id = user_id
-        st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
-        mapping_df = pd.DataFrame({"Doctor ID": ["D001", "D002"], "Assigned Patient ID": ["PA001", "PA002"]})
-        st.sidebar.table(mapping_df)
-        assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
-        if assigned:
-            patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
+        st.sidebar.markdown("**Assigned Patients:**")
+        assigned = fetch_patients_for_doctor(
+            doctor_id, sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token
+        )
+        if not assigned:
+            assigned = ["PA001", "PA002"]
+            st.sidebar.warning("⚠️ Using fallback simulated patient mapping.")
+        else:
             st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
+        patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
     elif role == "pharmacist":
         st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="pharmacist_patient_select")
+        all_patients = fetch_all_patients(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+        if not all_patients:
+            all_patients = ["PA001", "PA002"]
+        patient_id = st.sidebar.selectbox("Select Patient Context", [""] + all_patients, index=0, key="pharmacist_patient_select")
     elif role == "labtechnician":
         st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="labtech_patient_select")
+        all_patients = fetch_all_patients(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+        if not all_patients:
+            all_patients = ["PA001", "PA002"]
+        patient_id = st.sidebar.selectbox("Select Patient Context", [""] + all_patients, index=0, key="labtech_patient_select")
     elif role == "admin":
         st.sidebar.warning("⚡ Admin has unrestricted access.")
-        patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0, key="admin_patient_select")
-        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0, key="admin_doctor_select")
+        all_patients = fetch_all_patients(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+        if not all_patients:
+            all_patients = ["PA001", "PA002"]
+        all_doctors = fetch_all_doctors(sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token)
+        if not all_doctors:
+            all_doctors = ["D001", "D002"]
+        patient_id = st.sidebar.selectbox("Simulate Patient Context", [""] + all_patients, index=0, key="admin_patient_select")
+        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", [""] + all_doctors, index=0, key="admin_doctor_select")
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
