@@ -228,76 +228,119 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 
 
-# Hardcoded local user database
-HARDCODED_USERS = {
-    "D001": {
-        "role": "doctor",
-        "name": "Dr. Smith",
-        "id": "D001",
-        "patient_id": None,
-        "email": "dr.smith@hospital.com",
-        "doctor_id": "D001"
-    },
-    "D002": {
-        "role": "doctor",
-        "name": "Dr. Jones",
-        "id": "D002",
-        "patient_id": None,
-        "email": "dr.jones@hospital.com",
-        "doctor_id": "D002"
-    },
-    "P001": {
-        "role": "pharmacist",
-        "name": "Pharm. Doe",
-        "id": "P001",
-        "patient_id": None,
-        "email": "pharm.doe@hospital.com",
-        "doctor_id": None
-    },
-    "A001": {
-        "role": "admin",
-        "name": "Admin User",
-        "id": "A001",
-        "patient_id": None,
-        "email": "admin@hospital.com",
-        "doctor_id": None
-    },
-    "L001": {
-        "role": "labtechnician",
-        "name": "Lab Tech 1",
-        "id": "L001",
-        "patient_id": None,
-        "email": "lab.tech1@hospital.com",
-        "doctor_id": None
-    },
-    "PA001": {
-        "role": "patient",
-        "name": "Patient 001",
-        "id": "PA001",
-        "patient_id": None,
-        "email": "patient001@hospital.com",
-        "doctor_id": "D001"
-    },
-    "U001": {
-        "role": "admin",
-        "name": "jeevanmg958",
-        "id": "U001",
-        "patient_id": None,
-        "email": "jeevanmg958@gmail.com",
-        "doctor_id": None
-    }
-}
-
-# Credentials & Role Validation Function (Local Hardcoded DB)
-def validate_credentials(login_role, login_id):
-    uid_clean = login_id.strip()
-    if uid_clean in HARDCODED_USERS:
-        user_info = HARDCODED_USERS[uid_clean]
-        db_role = user_info.get("role", "").lower().strip()
+# Credentials & Role Validation Function via Databricks table
+def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
+    if not host or not token:
+        return False, "Databricks connection URL or Access Token is missing. Please configure them in the sidebar expander.", ""
+    if not warehouse_id:
+        return False, "SQL Warehouse ID is missing. Please configure it in the sidebar expander.", ""
+        
+    try:
+        client = get_db_client(host, token)
+        if not client:
+            return False, "Failed to initialize Databricks Workspace client.", ""
+            
+        uid_clean = login_id.strip()
+        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{uid_clean}' OR LOWER(email) = '{uid_clean.lower()}'"
+        
+        res = client.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=sql
+        )
+        
+        # Poll statement status
+        statement_id = res.statement_id
+        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        start_poll = time.time()
+        while state in ["PENDING", "RUNNING"]:
+            if time.time() - start_poll > 30:
+                return False, "Databricks database query timed out.", ""
+            time.sleep(1)
+            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+            res = poll_res
+            
+        if state == "FAILED":
+            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
+            return False, f"Databricks SQL query failed: {error_msg}", ""
+            
+        if not res.result or not res.result.data_array:
+            return False, f"User '{login_id}' not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
+            
+        row = res.result.data_array[0]
+        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
+        record = dict(zip(schema_fields, row))
+        
+        db_role = record.get("role", "").lower().strip()
         if db_role != login_role.lower().strip():
-            return False, f"Role mismatch: User `{uid_clean}` is registered locally as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
-        return True, user_info, "Local Hardcoded Database"
-    return False, f"User ID `{login_id}` not found in local database.", ""
+            return False, f"Role mismatch: User `{login_id}` is registered in Databricks as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
+            
+        user_info = {
+            "role": db_role,
+            "name": record.get("username", f"User {record.get('user_id')}"),
+            "id": record.get("user_id"),
+            "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
+            "email": record.get("email", ""),
+            "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
+        }
+        return True, user_info, "Databricks Unity Catalog"
+    except Exception as e:
+        return False, f"Databricks table query error: {str(e)}", ""
+
+def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, host, token):
+    if not host or not token:
+        return False, "Databricks connection URL or Access Token is missing. Please configure them in the sidebar expander.", ""
+    if not warehouse_id:
+        return False, "SQL Warehouse ID is missing. Please configure it in the sidebar expander.", ""
+        
+    try:
+        client = get_db_client(host, token)
+        if not client:
+            return False, "Failed to initialize Databricks Workspace client.", ""
+            
+        email_clean = email.strip().lower()
+        sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE LOWER(email) = '{email_clean}'"
+        
+        res = client.statement_execution.execute_statement(
+            warehouse_id=warehouse_id,
+            statement=sql
+        )
+        
+        # Poll statement status
+        statement_id = res.statement_id
+        state = res.status.state.value if hasattr(res.status.state, "value") else str(res.status.state)
+        start_poll = time.time()
+        while state in ["PENDING", "RUNNING"]:
+            if time.time() - start_poll > 30:
+                return False, "Databricks database query timed out.", ""
+            time.sleep(1)
+            poll_res = client.statement_execution.get_statement(statement_id=statement_id)
+            state = poll_res.status.state.value if hasattr(poll_res.status.state, "value") else str(poll_res.status.state)
+            res = poll_res
+            
+        if state == "FAILED":
+            error_msg = res.status.error.message if res.status.error else "Unknown SQL Execution Error"
+            return False, f"Databricks SQL query failed: {error_msg}", ""
+            
+        if not res.result or not res.result.data_array:
+            return False, f"Email '{email}' not found in Databricks users table `{catalog}.{schema}.{table}`.", ""
+            
+        row = res.result.data_array[0]
+        schema_fields = [f.name.lower() for f in res.manifest.schema.columns]
+        record = dict(zip(schema_fields, row))
+        
+        db_role = record.get("role", "").lower().strip()
+        user_info = {
+            "role": db_role,
+            "name": record.get("username", f"User {record.get('user_id')}"),
+            "id": record.get("user_id"),
+            "patient_id": record.get("patient_id") if record.get("patient_id") and record.get("patient_id") != "null" else None,
+            "email": record.get("email", ""),
+            "doctor_id": record.get("doctor_id") if record.get("doctor_id") and record.get("doctor_id") != "null" else None
+        }
+        return True, user_info, "Databricks Unity Catalog"
+    except Exception as e:
+        return False, f"Databricks table query error: {str(e)}", ""
 
 # Initialize Session State
 if "audit_logs" not in st.session_state:
@@ -307,8 +350,8 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
-if "users_directory" not in st.session_state or not st.session_state.users_directory:
-    st.session_state.users_directory = HARDCODED_USERS.copy()
+if "users_directory" not in st.session_state:
+    st.session_state.users_directory = {}
 
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
@@ -321,9 +364,15 @@ with st.sidebar.expander("🔑 Manual Token Override"):
     host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
     token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
 
+with st.sidebar.expander("🗄️ Databricks Table Settings"):
+    sync_catalog = st.text_input("Catalog", value="aienterprise")
+    sync_schema = st.text_input("Schema", value="default")
+    sync_table = st.text_input("Table", value="users")
+    sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
+
 db_host = host_override if host_override else (default_client.config.host if default_client else os.environ.get("DATABRICKS_HOST", ""))
 db_token = (
-    token_override if token_override
+        token_override if token_override
     else (get_request_header("x-forwarded-access-token") if get_request_header("x-forwarded-access-token")
           else (default_client.config.token if default_client else os.environ.get("DATABRICKS_TOKEN", "")))
 )
@@ -331,7 +380,24 @@ db_token = (
 if db_host and not db_host.startswith(("http://", "https://")):
     db_host = f"https://{db_host}"
 
-
+# Auto-SSO login flow
+if not st.session_state.authenticated and not st.session_state.logged_out:
+    sso_email = headers_email or headers_user
+    if sso_email:
+        # Check if warehouse is configured before attempting auto-login
+        if db_host and db_token and sync_warehouse:
+            success, result, source = validate_credentials_by_email(
+                sso_email, sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token
+            )
+            if success:
+                st.session_state.authenticated = True
+                st.session_state.user_role = result["role"]
+                st.session_state.user_id = result["id"]
+                st.session_state.user_info = result
+                st.session_state.auth_source = "Databricks SSO"
+                st.session_state.logged_out = False
+                log_audit_request(result["id"], result["role"], "User Auto SSO Sign-In", "SUCCESS", f"Authenticated via {source}")
+                st.rerun()
 
 USERS_BY_ID = st.session_state.users_directory
 
@@ -425,7 +491,16 @@ if not st.session_state.authenticated:
                 st.error("❌ Please enter both Role and User ID.")
             else:
                 with st.spinner("Validating credentials..."):
-                    success, result, source = validate_credentials(login_role.strip().lower(), login_id.strip())
+                    success, result, source = validate_credentials(
+                        login_role.strip().lower(),
+                        login_id.strip(),
+                        sync_catalog,
+                        sync_schema,
+                        sync_table,
+                        sync_warehouse,
+                        db_host,
+                        db_token
+                    )
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.user_role = login_role.strip().lower()
@@ -441,29 +516,32 @@ if not st.session_state.authenticated:
                         log_audit_request(login_id.strip(), login_role.strip().lower(), "User Sign-In", "FAILED", result)
     with login_tab2:
         if headers_email or headers_user:
-            st.write(f"Detected SSO User: **{headers_email or headers_user}**")
-            email_key = (headers_email or headers_user).lower().strip()
-            matched_user = None
-            scan_users = USERS_BY_ID
-            for u in scan_users.values():
-                if u["email"].lower() == email_key:
-                    matched_user = u
-                    break
-            
-            if matched_user:
-                st.write(f"Mapped Profile: **{matched_user['name']}** ({matched_user['role'].upper()})")
-                if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
-                    st.session_state.authenticated = True
-                    st.session_state.user_role = matched_user["role"]
-                    st.session_state.user_id = matched_user["id"]
-                    st.session_state.user_info = matched_user
-                    st.session_state.auth_source = "Databricks SSO"
-                    st.session_state.logged_out = False
-                    log_audit_request(matched_user["id"], matched_user["role"], "User SSO Sign-In", "SUCCESS", f"SSO logged in via header email: {headers_email}")
-                    st.success("SSO Sign-in Successful!")
-                    st.rerun()
-            else:
-                st.warning("Your SSO email is not mapped in the portal directory. Please sign in manually.")
+            sso_email = (headers_email or headers_user).strip().lower()
+            st.write(f"Detected SSO User: **{sso_email}**")
+            if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
+                with st.spinner("Validating credentials with Databricks table..."):
+                    success, result, source = validate_credentials_by_email(
+                        sso_email,
+                        sync_catalog,
+                        sync_schema,
+                        sync_table,
+                        sync_warehouse,
+                        db_host,
+                        db_token
+                    )
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.user_role = result["role"]
+                        st.session_state.user_id = result["id"]
+                        st.session_state.user_info = result
+                        st.session_state.auth_source = source
+                        st.session_state.logged_out = False
+                        log_audit_request(result["id"], result["role"], "User SSO Sign-In", "SUCCESS", f"Authenticated via {source}")
+                        st.success("SSO Sign-in Successful!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ SSO Login Failed: {result}")
+                        log_audit_request(sso_email, "unknown", "User SSO Sign-In", "FAILED", result)
         else:
             st.info("No SSO headers detected. Please sign in manually via the Select Identity tab.")
     st.markdown("</div>", unsafe_allow_html=True)
