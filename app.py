@@ -268,7 +268,7 @@ def execute_statement_with_fallback(sql, catalog, schema, table, warehouse_id, h
     if not client_attempts:
         raise ValueError("No valid Databricks clients could be initialized.")
         
-    last_error = None
+    errors = []
     for client, client_name in client_attempts:
         try:
             active_wh = wh_id
@@ -300,10 +300,17 @@ def execute_statement_with_fallback(sql, catalog, schema, table, warehouse_id, h
                 
             return res, client_name, active_wh
         except Exception as e:
-            last_error = e
+            errors.append(f"{client_name} -> {str(e)}")
             continue
             
-    raise last_error
+    header_keys = []
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            header_keys = list(st.context.headers.keys())
+    except Exception:
+        pass
+        
+    raise ValueError(f"All query attempts failed. Errors: {'; '.join(errors)}. (Headers found: {header_keys})")
 
 # Credentials & Role Validation Function via Databricks table
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
