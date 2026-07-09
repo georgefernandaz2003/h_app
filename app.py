@@ -482,7 +482,7 @@ with st.sidebar.expander("🗄️ Databricks Table Settings"):
     sync_catalog = st.text_input("Catalog", value="aienterprise")
     sync_schema = st.text_input("Schema", value="default")
     sync_table = st.text_input("Table", value="users")
-    sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", ""))
+    sync_warehouse = st.text_input("SQL Warehouse ID", value=os.environ.get("SQL_WAREHOUSE_ID", "dfbcf4b12381c175"))
     bypass_auth = st.checkbox("Bypass UC Table Auth (Offline Mock Mode)", value=False, key="bypass_auth")
 
 db_host = host_override if host_override else (default_client.config.host if default_client else os.environ.get("DATABRICKS_HOST", ""))
