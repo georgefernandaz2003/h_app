@@ -246,6 +246,24 @@ def get_automatic_warehouse_id(client):
     except Exception:
         return None
 
+def format_permission_error(error_msg, catalog, schema, table):
+    err_lower = error_msg.lower()
+    if "42501" in error_msg or "insufficient" in err_lower or "privileges" in err_lower or "permissions" in err_lower:
+        return f"""
+<div style="background-color: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 8px; padding: 1rem; margin-top: 1rem;">
+<h4 style="color: #ef4444; margin-top: 0;">🔑 Unity Catalog Permission Error (42501)</h4>
+<p style="color: #fca5a5; font-size: 0.9rem;">The authenticated user or service principal does not have permission to read the users table.</p>
+<p style="color: #fff; font-size: 0.9rem; margin-bottom: 0.5rem;">To resolve this, ask a Databricks Administrator to run these commands in the SQL Editor:</p>
+<pre style="background: rgba(0, 0, 0, 0.4); padding: 0.8rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem; color: #34d399; overflow-x: auto;">
+GRANT USE CATALOG ON CATALOG {catalog} TO `account users`;
+GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO `account users`;
+GRANT SELECT ON TABLE {catalog}.{schema}.{table} TO `account users`;
+</pre>
+<p style="color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem;">*(Note: You can replace `account users` with your specific email or group to limit access)*</p>
+</div>
+"""
+    return error_msg
+
 def execute_statement_with_fallback(sql, catalog, schema, table, warehouse_id, host, token):
     primary_client = get_db_client()
     has_sso = bool(get_request_header("x-forwarded-access-token"))
@@ -343,7 +361,8 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
         }
         return True, user_info, f"Databricks table ({auth_source})"
     except Exception as e:
-        return False, f"Databricks table query error: {str(e)}", ""
+        err_msg = format_permission_error(str(e), catalog, schema, table)
+        return False, err_msg, ""
 
 def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, host, token):
     try:
@@ -372,7 +391,8 @@ def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, h
         }
         return True, user_info, f"Databricks table ({auth_source})"
     except Exception as e:
-        return False, f"Databricks table query error: {str(e)}", ""
+        err_msg = format_permission_error(str(e), catalog, schema, table)
+        return False, err_msg, ""
 
 def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, host, token):
     try:
@@ -597,7 +617,10 @@ if not st.session_state.authenticated:
                         st.success(f"Successfully logged in via {source}!")
                         st.rerun()
                     else:
-                        st.error(f"❌ Login Failed: {result}")
+                        if result.strip().startswith("<div"):
+                            st.markdown(result, unsafe_allow_html=True)
+                        else:
+                            st.error(f"❌ Login Failed: {result}")
                         log_audit_request(login_id.strip(), login_role.strip().lower(), "User Sign-In", "FAILED", result)
     with login_tab2:
         if headers_email or headers_user:
@@ -625,7 +648,10 @@ if not st.session_state.authenticated:
                         st.success("SSO Sign-in Successful!")
                         st.rerun()
                     else:
-                        st.error(f"❌ SSO Login Failed: {result}")
+                        if result.strip().startswith("<div"):
+                            st.markdown(result, unsafe_allow_html=True)
+                        else:
+                            st.error(f"❌ SSO Login Failed: {result}")
                         log_audit_request(sso_email, "unknown", "User SSO Sign-In", "FAILED", result)
         else:
             st.info("No SSO headers detected. Please sign in manually via the Select Identity tab.")
