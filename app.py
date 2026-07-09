@@ -228,6 +228,24 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 
 
+def get_automatic_warehouse_id(client):
+    try:
+        warehouses = list(client.warehouses.list())
+        if not warehouses:
+            return None
+        # Try to find a RUNNING warehouse
+        running = [w for w in warehouses if str(w.state).upper() == "RUNNING"]
+        if running:
+            return running[0].id
+        # Try to find a STARTING warehouse
+        starting = [w for w in warehouses if str(w.state).upper() == "STARTING"]
+        if starting:
+            return starting[0].id
+        # Default to the first one in the list
+        return warehouses[0].id
+    except Exception:
+        return None
+
 # Credentials & Role Validation Function via Databricks table
 def validate_credentials(login_role, login_id, catalog, schema, table, warehouse_id, host, token):
     try:
@@ -244,7 +262,9 @@ def validate_credentials(login_role, login_id, catalog, schema, table, warehouse
             
         wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
         if not wh_id:
-            return False, "SQL Warehouse ID is missing. Please configure it in the sidebar settings.", ""
+            wh_id = get_automatic_warehouse_id(client)
+            if not wh_id:
+                return False, "SQL Warehouse ID is missing and auto-detection failed. Please configure it in the sidebar settings.", ""
             
         uid_clean = login_id.strip()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE user_id = '{uid_clean}' OR LOWER(email) = '{uid_clean.lower()}'"
@@ -308,7 +328,9 @@ def validate_credentials_by_email(email, catalog, schema, table, warehouse_id, h
             
         wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
         if not wh_id:
-            return False, "SQL Warehouse ID is missing. Please configure it in the sidebar settings.", ""
+            wh_id = get_automatic_warehouse_id(client)
+            if not wh_id:
+                return False, "SQL Warehouse ID is missing and auto-detection failed. Please configure it in the sidebar settings.", ""
             
         email_clean = email.strip().lower()
         sql = f"SELECT user_id, username, role, patient_id, email, doctor_id FROM {catalog}.{schema}.{table} WHERE LOWER(email) = '{email_clean}'"
@@ -367,7 +389,9 @@ def fetch_patients_for_doctor(doctor_id, catalog, schema, table, warehouse_id, h
             
         wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
         if not wh_id:
-            return []
+            wh_id = get_automatic_warehouse_id(client)
+            if not wh_id:
+                return []
             
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE doctor_id = '{doctor_id.strip()}' AND role = 'patient'"
         res = client.statement_execution.execute_statement(
@@ -406,7 +430,9 @@ def fetch_all_patients(catalog, schema, table, warehouse_id, host, token):
             
         wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
         if not wh_id:
-            return []
+            wh_id = get_automatic_warehouse_id(client)
+            if not wh_id:
+                return []
             
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'patient'"
         res = client.statement_execution.execute_statement(
@@ -445,7 +471,9 @@ def fetch_all_doctors(catalog, schema, table, warehouse_id, host, token):
             
         wh_id = warehouse_id if warehouse_id else os.environ.get("SQL_WAREHOUSE_ID", "")
         if not wh_id:
-            return []
+            wh_id = get_automatic_warehouse_id(client)
+            if not wh_id:
+                return []
             
         sql = f"SELECT user_id FROM {catalog}.{schema}.{table} WHERE role = 'doctor'"
         res = client.statement_execution.execute_statement(
@@ -514,7 +542,7 @@ if not st.session_state.authenticated and not st.session_state.logged_out:
     sso_email = headers_email or headers_user
     if sso_email:
         # Check if warehouse is configured before attempting auto-login
-        if db_host and db_token and sync_warehouse:
+        if db_host and db_token:
             success, result, source = validate_credentials_by_email(
                 sso_email, sync_catalog, sync_schema, sync_table, sync_warehouse, db_host, db_token
             )
