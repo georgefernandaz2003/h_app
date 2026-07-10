@@ -303,7 +303,7 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 # Credentials & Role Validation Functions (Database Validation Only)
 if "warehouse_id" not in st.session_state:
-    st.session_state.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "dfbcf4b12381c175")
+    st.session_state.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "6515b73354b42366")
 
 def validate_credentials(email_id, user_id, role):
     email_clean = email_id.strip().lower()
@@ -312,7 +312,7 @@ def validate_credentials(email_id, user_id, role):
     
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        w = get_db_client(db_host, db_token) or WorkspaceClient()
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
@@ -346,7 +346,7 @@ def get_user_by_email(email_id):
     email_clean = email_id.strip().lower()
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        w = get_db_client(db_host, db_token) or WorkspaceClient()
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
@@ -380,7 +380,7 @@ def get_user_by_email(email_id):
 def execute_statement_query(query):
     try:
         from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        w = get_db_client(db_host, db_token) or WorkspaceClient()
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
             statement=query,
