@@ -367,6 +367,38 @@ def get_user_by_email(email_id):
     except Exception as e:
         return False, f"Database error: {str(e)}"
 
+# Helper functions to query user relationships and metadata from the Databricks table
+def execute_statement_query(query):
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        response = w.statement_execution.execute_statement(
+            warehouse_id='6515b73354b42366',
+            statement=query,
+            wait_timeout='30s'
+        )
+        if response.result and response.result.data_array:
+            return response.result.data_array
+    except Exception as e:
+        import sys
+        print(f"[SQL ERROR] Query failed: {query} | Error: {e}", file=sys.stderr)
+    return []
+
+def get_patients_for_doctor(doctor_id):
+    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE doctor_id = '{doctor_id}' AND role = 'patient'"
+    rows = execute_statement_query(query)
+    return [row[0] for row in rows if row and len(row) > 0]
+
+def get_all_patients():
+    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE role = 'patient'"
+    rows = execute_statement_query(query)
+    return [row[0] for row in rows if row and len(row) > 0]
+
+def get_all_doctors():
+    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE role = 'doctor'"
+    rows = execute_statement_query(query)
+    return [row[0] for row in rows if row and len(row) > 0]
+
 # Initialize Session State
 if "audit_logs" not in st.session_state:
     st.session_state.audit_logs = []
@@ -450,23 +482,29 @@ if st.session_state.authenticated:
         st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
     elif role == "doctor":
         doctor_id = user_id
-        st.sidebar.markdown("**Simulated Doctor-Patient Mapping:**")
-        mapping_df = pd.DataFrame({"Doctor ID": ["D001", "D002"], "Assigned Patient ID": ["PA001", "PA002"]})
-        st.sidebar.table(mapping_df)
-        assigned = mapping_df[mapping_df["Doctor ID"] == doctor_id]["Assigned Patient ID"].tolist()
+        assigned = get_patients_for_doctor(doctor_id)
         if assigned:
+            mapping_df = pd.DataFrame({"Doctor ID": [doctor_id] * len(assigned), "Assigned Patient ID": assigned})
+            st.sidebar.markdown("**Active Doctor-Patient Mapping:**")
+            st.sidebar.table(mapping_df)
             patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
             st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
+        else:
+            st.sidebar.warning("No patients assigned to you in the database.")
     elif role == "pharmacist":
         st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="pharmacist_patient_select")
+        patients = [""] + get_all_patients()
+        patient_id = st.sidebar.selectbox("Select Patient Context", patients, index=0, key="pharmacist_patient_select")
     elif role == "labtechnician":
         st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
-        patient_id = st.sidebar.selectbox("Select Patient Context", ["", "PA001", "PA002"], index=0, key="labtech_patient_select")
+        patients = [""] + get_all_patients()
+        patient_id = st.sidebar.selectbox("Select Patient Context", patients, index=0, key="labtech_patient_select")
     elif role == "admin":
         st.sidebar.warning("⚡ Admin has unrestricted access.")
-        patient_id = st.sidebar.selectbox("Simulate Patient Context", ["", "PA001", "PA002"], index=0, key="admin_patient_select")
-        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", ["", "D001", "D002"], index=0, key="admin_doctor_select")
+        patients = [""] + get_all_patients()
+        doctors = [""] + get_all_doctors()
+        patient_id = st.sidebar.selectbox("Simulate Patient Context", patients, index=0, key="admin_patient_select")
+        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", doctors, index=0, key="admin_doctor_select")
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
