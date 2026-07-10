@@ -306,9 +306,9 @@ if "warehouse_id" not in st.session_state:
     st.session_state.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "6515b73354b42366")
 
 def validate_credentials(email_id, user_id, role):
-    email_clean = email_id.strip().lower()
+    email_clean = email_id.strip()
     uid_clean = user_id.strip()
-    role_clean = role.strip().lower()
+    role_clean = role.strip()
     
     try:
         from databricks.sdk import WorkspaceClient
@@ -316,9 +316,7 @@ def validate_credentials(email_id, user_id, role):
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE TRIM(LOWER(email)) = '{email_clean}' 
-              AND TRIM(user_id) = '{uid_clean}' 
-              AND TRIM(LOWER(role)) = '{role_clean}'
+            WHERE email = '{email_clean}' AND user_id = '{uid_clean}' AND role = '{role_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -345,14 +343,14 @@ def validate_credentials(email_id, user_id, role):
         return False, f"Databricks table query error: {str(e)}", ""
 
 def get_user_by_email(email_id):
-    email_clean = email_id.strip().lower()
+    email_clean = email_id.strip()
     try:
         from databricks.sdk import WorkspaceClient
         w = get_db_client(db_host, db_token) or WorkspaceClient()
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE TRIM(LOWER(email)) = '{email_clean}'
+            WHERE email = '{email_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -396,12 +394,12 @@ def execute_statement_query(query):
     return []
 
 def get_patients_for_doctor(doctor_id):
-    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE TRIM(LOWER(doctor_id)) = '{doctor_id.strip().lower()}' AND TRIM(LOWER(role)) = 'patient'"
+    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE doctor_id = '{doctor_id}' AND role = 'patient'"
     rows = execute_statement_query(query)
     return [row[0] for row in rows if row and len(row) > 0]
 
 def get_all_patients():
-    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE TRIM(LOWER(role)) = 'patient'"
+    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE role = 'patient'"
     rows = execute_statement_query(query)
     return [row[0] for row in rows if row and len(row) > 0]
 
