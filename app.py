@@ -508,8 +508,8 @@ if st.session_state.authenticated:
         assigned = get_patients_for_doctor(doctor_id)
         if assigned:
             mapping_df = pd.DataFrame({"Doctor ID": [doctor_id] * len(assigned), "Assigned Patient ID": assigned})
-            st.sidebar.markdown("**Active Doctor-Patient Mapping:**")
-            st.sidebar.table(mapping_df)
+            with st.sidebar.expander("📋 Active Doctor-Patient Mapping", expanded=False):
+                st.table(mapping_df)
             patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
             st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
         else:
@@ -589,196 +589,16 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ================= MAIN PANEL: USER INTERACTION & QUERY GENERATION =================
-col1, col2 = st.columns([2, 1])
 
-with col1:
-    st.markdown("### 💬 Ask Supervisor Agent")
-    st.caption("Submit queries. The gateway automatically injects row-level filters and role context.")
-    
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-        
-    example_prompts = {
-        "patient": [
-            f"Show my medical history",
-            f"Show clinical details for patient PA002"  # Should fail due to Patient RBAC rules
-        ],
-        "doctor": [
-            "Show my patients",
-            "Show medical history for Patient PA001",
-            "Show medical history for Patient PA002"  # Depends on mapping
-        ],
-        "pharmacist": [
-            "Check medication history for Patient PA001",
-            "Check drug compatibility for Patient PA001"
-        ],
-        "labtechnician": [
-            "List recent lab reports",
-            "Show lab reports for Patient PA001"
-        ],
-        "admin": [
-            "Show doctor-patient mappings",
-            "Show all medical records across all patients"
-        ]
-    }
-        
-    # Render chat history container
-    chat_container = st.container()
-    with chat_container:
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if "caption" in msg:
-                    st.caption(msg["caption"])
-                    
-    # Render quick examples if history is empty
-    clicked_prompt = None
-    if not st.session_state.chat_history:
-        st.markdown("**Quick Examples:**")
-        example_cols = st.columns(len(example_prompts[role]))
-        for idx, ex in enumerate(example_prompts[role]):
-            if example_cols[idx].button(ex, key=f"ex_{idx}"):
-                clicked_prompt = ex
-
-    # Main chat input at the bottom
-    user_query = st.chat_input("Ask the Healthcare Supervisor...")
-    active_query = user_query if user_query else clicked_prompt
-
-    if active_query:
-        # Check if we should use local simulation mode (e.g. running on localhost without tokens)
-        use_simulation = not db_host or not db_token
-        
-        # Append user message
-        st.session_state.chat_history.append({"role": "user", "content": active_query})
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(active_query)
-                
-        if use_simulation:
-            with st.spinner("Invoking Local Supervisor Agent Simulation..."):
-                time.sleep(0.8) # Simulate slight network latency
-                mock_response = get_mock_agent_response(active_query, role, patient_id, doctor_id)
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": mock_response,
-                    "caption": "⚠️ *Local Simulation Mode Active*"
-                })
-                log_audit_request(user_id, role, active_query, "SUCCESS_SIMULATED", "Processed locally via simulation.")
-                st.rerun()
-        else:
-                    
-            with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
-                # Format query content to automatically pass identity and context
-                context_prefix = f"[User Context - Role: {role.upper()} | User ID: {user_id}"
-                if patient_id:
-                    context_prefix += f" | Patient ID: {patient_id}"
-                if doctor_id:
-                    context_prefix += f" | Doctor ID: {doctor_id}"
-                context_prefix += "]\n\n"
-
-                payload = {
-                    "input": [
-                        {"role": "user", "content": f"{context_prefix}{active_query}"}
-                    ],
-                    "user_id": user_id,
-                    "role": role,
-                    "patient_id": patient_id,
-                    "doctor_id": doctor_id,
-                    "custom_inputs": {
-                        "user_id": user_id,
-                        "role": role,
-                        "patient_id": patient_id,
-                        "doctor_id": doctor_id
-                    }
-                }
-                
-                # Setup endpoint invocation
-                url = f"{db_host.rstrip('/')}/serving-endpoints/{endpoint_name}/invocations"
-                headers = {
-                    "Authorization": f"Bearer {db_token}",
-                    "Content-Type": "application/json"
-                }
-                
-                start_time = datetime.now()
-                try:
-                    response = requests.post(url, json=payload, headers=headers, timeout=120)
-                    duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                    
-                    if response.status_code == 200:
-                        try:
-                            if not response.text.strip():
-                                raise ValueError("Empty response body received from the serving endpoint.")
-                            res_data = parse_sse_or_json(response.text)
-                            if isinstance(res_data, dict):
-                                predictions = res_data.get("predictions", res_data)
-                            else:
-                                predictions = res_data
-                            extracted_response = extract_agent_response_text(predictions)
-                            
-                            # Save assistant response
-                            st.session_state.chat_history.append({
-                                "role": "assistant", 
-                                "content": extracted_response,
-                                "caption": f"⚡ *Response received in {duration_ms}ms*"
-                            })
-                            log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
-                            st.rerun()
-                        except Exception as parse_err:
-                            err_str = str(parse_err)
-                            content_type = response.headers.get("Content-Type", "unknown")
-                            error_preview = response.text[:1000] if response.text else "(No content)"
-                            
-                            if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
-                                error_msg = (
-                                    f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
-                                    f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
-                                    f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
-                                    f"**Active Token Scopes:** `{err_str}`\n\n"
-                                    f"### 💡 How to Resolve:\n"
-                                    f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
-                                    f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
-                                )
-                            else:
-                                error_msg = (
-                                    f"**JSON/SSE Parsing Error:** The endpoint returned status code `200 OK`, "
-                                    f"but the response body could not be parsed correctly.\n\n"
-                                    f"**Error Details:** `{err_str}`\n"
-                                    f"**Content-Type:** `{content_type}`\n\n"
-                                    f"**Response Preview:**\n```html\n{error_preview}\n```"
-                                )
-                            st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                            log_audit_request(user_id, role, active_query, "JSON_DECODE_ERROR", f"Content-Type: {content_type} | Error: {err_str}")
-                            st.rerun()
-                    else:
-                        error_msg = f"**Endpoint Error (HTTP {response.status_code})**\n```json\n{response.text}\n```"
-                        st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                        log_audit_request(user_id, role, active_query, f"ERROR_{response.status_code}", response.text)
-                        st.rerun()
-                except Exception as e:
-                    err_str = str(e)
-                    if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
-                        error_msg = (
-                            f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
-                            f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
-                            f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
-                            f"**Active Token Scopes:** `{err_str}`\n\n"
-                            f"### 💡 How to Resolve:\n"
-                            f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
-                            f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
-                        )
-                    else:
-                        error_msg = f"**Connection Error:** {err_str}"
-                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
-                    log_audit_request(user_id, role, active_query, "CONNECTION_ERROR", err_str)
-                    st.rerun()
-
-with col2:
+# ================= TOP PANEL: POLICY & TOKEN INSPECTION =================
+policy_col1, policy_col2 = st.columns(2)
+with policy_col1:
     with st.expander("🛡️ Active Security Policy", expanded=False):
         st.caption("How the Supervisor enforces HIPAA & row-level filtering:")
         
         # Render rules based on role
         if role == "patient":
-            st.markdown(f"""
+            st.markdown(f'''
             <div class="status-card">
                 <h5 style="color: #60a5fa; margin-top:0;">Patient Policy Rules</h5>
                 <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
@@ -787,9 +607,9 @@ with col2:
                     <li>Hides columns / metadata of unrelated patients</li>
                 </ul>
             </div>
-            """, unsafe_allow_html=True)
+            ''', unsafe_allow_html=True)
         elif role == "doctor":
-            st.markdown(f"""
+            st.markdown(f'''
             <div class="status-card">
                 <h5 style="color: #34d399; margin-top:0;">Doctor Policy Rules</h5>
                 <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
@@ -798,9 +618,9 @@ with col2:
                     <li>Limits query response strictly to matching rows</li>
                 </ul>
             </div>
-            """, unsafe_allow_html=True)
+            ''', unsafe_allow_html=True)
         elif role == "pharmacist":
-            st.markdown(f"""
+            st.markdown(f'''
             <div class="status-card">
                 <h5 style="color: #a5b4fc; margin-top:0;">Pharmacist Policy Rules</h5>
                 <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
@@ -809,9 +629,9 @@ with col2:
                     <li>Audit logged under pharmacist credentials</li>
                 </ul>
             </div>
-            """, unsafe_allow_html=True)
+            ''', unsafe_allow_html=True)
         elif role == "labtechnician":
-            st.markdown(f"""
+            st.markdown(f'''
             <div class="status-card">
                 <h5 style="color: #f472b6; margin-top:0;">Lab Technician Policy Rules</h5>
                 <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
@@ -820,9 +640,9 @@ with col2:
                     <li>Redacts sensitive identifiers</li>
                 </ul>
             </div>
-            """, unsafe_allow_html=True)
+            ''', unsafe_allow_html=True)
         elif role == "admin":
-            st.markdown(f"""
+            st.markdown(f'''
             <div class="status-card">
                 <h5 style="color: #fb923c; margin-top:0;">Admin Policy Rules</h5>
                 <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
@@ -831,10 +651,10 @@ with col2:
                     <li>Maintains full audit trails of administrative reads</li>
                 </ul>
             </div>
-            """, unsafe_allow_html=True)
-        
-    # Show outbound payload simulation
-    with st.expander("🔍 Inspect Security Token Payload"):
+            ''', unsafe_allow_html=True)
+
+with policy_col2:
+    with st.expander("🔍 Inspect Security Token Payload", expanded=False):
         simulated_token_claims = {
             "iss": "databricks-app-gateway",
             "sub": user_id,
@@ -850,4 +670,183 @@ with col2:
         }
         st.json(simulated_token_claims)
 
+# ================= CHAT CONTAINER =================
+st.markdown("### 💬 Ask Supervisor Agent")
+st.caption("Submit queries. The gateway automatically injects row-level filters and role context.")
 
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+    
+example_prompts = {
+    "patient": [
+        f"Show my medical history",
+        f"Show clinical details for patient PA002"  # Should fail due to Patient RBAC rules
+    ],
+    "doctor": [
+        "Show my patients",
+        "Show medical history for Patient PA001",
+        "Show medical history for Patient PA002"  # Depends on mapping
+    ],
+    "pharmacist": [
+        "Check medication history for Patient PA001",
+        "Check drug compatibility for Patient PA001"
+    ],
+    "labtechnician": [
+        "List recent lab reports",
+        "Show lab reports for Patient PA001"
+    ],
+    "admin": [
+        "Show doctor-patient mappings",
+        "Show all medical records across all patients"
+    ]
+}
+    
+# Render chat history container
+chat_container = st.container()
+with chat_container:
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "caption" in msg:
+                st.caption(msg["caption"])
+                
+# Render quick examples if history is empty
+clicked_prompt = None
+if not st.session_state.chat_history:
+    st.markdown("**Quick Examples:**")
+    example_cols = st.columns(len(example_prompts[role]))
+    for idx, ex in enumerate(example_prompts[role]):
+        if example_cols[idx].button(ex, key=f"ex_{idx}"):
+            clicked_prompt = ex
+
+# Main chat input at the bottom
+user_query = st.chat_input("Ask the Healthcare Supervisor...")
+active_query = user_query if user_query else clicked_prompt
+
+if active_query:
+    # Check if we should use local simulation mode (e.g. running on localhost without tokens)
+    use_simulation = not db_host or not db_token
+    
+    # Append user message
+    st.session_state.chat_history.append({"role": "user", "content": active_query})
+    with chat_container:
+        with st.chat_message("user"):
+            st.markdown(active_query)
+            
+    if use_simulation:
+        with st.spinner("Invoking Local Supervisor Agent Simulation..."):
+            time.sleep(0.8) # Simulate slight network latency
+            mock_response = get_mock_agent_response(active_query, role, patient_id, doctor_id)
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": mock_response,
+                "caption": "⚠️ *Local Simulation Mode Active*"
+            })
+            log_audit_request(user_id, role, active_query, "SUCCESS_SIMULATED", "Processed locally via simulation.")
+            st.rerun()
+    else:
+                
+        with st.spinner("Invoking Supervisor Agent & Applying Policy Rules..."):
+            # Format query content to automatically pass identity and context
+            context_prefix = f"[User Context - Role: {role.upper()} | User ID: {user_id}"
+            if patient_id:
+                context_prefix += f" | Patient ID: {patient_id}"
+            if doctor_id:
+                context_prefix += f" | Doctor ID: {doctor_id}"
+            context_prefix += "]" + "\n\n"
+
+            payload = {
+                "input": [
+                    {"role": "user", "content": f"{context_prefix}{active_query}"}
+                ],
+                "user_id": user_id,
+                "role": role,
+                "patient_id": patient_id,
+                "doctor_id": doctor_id,
+                "custom_inputs": {
+                    "user_id": user_id,
+                    "role": role,
+                    "patient_id": patient_id,
+                    "doctor_id": doctor_id
+                }
+            }
+            
+            # Setup endpoint invocation
+            url = f"{db_host.rstrip('/')}/serving-endpoints/{endpoint_name}/invocations"
+            headers = {
+                "Authorization": f"Bearer {db_token}",
+                "Content-Type": "application/json"
+            }
+            
+            start_time = datetime.now()
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=120)
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                
+                if response.status_code == 200:
+                    try:
+                        if not response.text.strip():
+                            raise ValueError("Empty response body received from the serving endpoint.")
+                        res_data = parse_sse_or_json(response.text)
+                        if isinstance(res_data, dict):
+                            predictions = res_data.get("predictions", res_data)
+                        else:
+                            predictions = res_data
+                        extracted_response = extract_agent_response_text(predictions)
+                        
+                        # Save assistant response
+                        st.session_state.chat_history.append({
+                            "role": "assistant", 
+                            "content": extracted_response,
+                            "caption": f"⚡ *Response received in {duration_ms}ms*"
+                        })
+                        log_audit_request(user_id, role, active_query, "SUCCESS", f"HTTP 200 | Latency: {duration_ms}ms")
+                        st.rerun()
+                    except Exception as parse_err:
+                        err_str = str(parse_err)
+                        content_type = response.headers.get("Content-Type", "unknown")
+                        error_preview = response.text[:1000] if response.text else "(No content)"
+                        
+                        if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
+                            error_msg = (
+                                f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
+                                f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
+                                f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
+                                f"**Active Token Scopes:** `{err_str}`\n\n"
+                                f"### 💡 How to Resolve:\n"
+                                f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
+                                f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
+                            )
+                        else:
+                            error_msg = (
+                                f"**JSON/SSE Parsing Error:** The endpoint returned status code `200 OK`, "
+                                f"but the response body could not be parsed correctly.\n\n"
+                                f"**Error Details:** `{err_str}`\n"
+                                f"**Content-Type:** `{content_type}`\n\n"
+                                f"**Response Preview:**\n```html\n{error_preview}\n```"
+                            )
+                        st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                        log_audit_request(user_id, role, active_query, "JSON_DECODE_ERROR", f"Content-Type: {content_type} | Error: {err_str}")
+                        st.rerun()
+                else:
+                    error_msg = f"**Endpoint Error (HTTP {response.status_code})**\n```json\n{response.text}\n```"
+                    st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                    log_audit_request(user_id, role, active_query, f"ERROR_{response.status_code}", response.text)
+                    st.rerun()
+            except Exception as e:
+                err_str = str(e)
+                if "INSUFFICIENT_SCOPE" in err_str or "vector-search" in err_str:
+                    error_msg = (
+                        f"❌ **OAuth Security Scope Error (INSUFFICIENT_SCOPE)**\n\n"
+                        f"The Databricks serving endpoint agent requires access to the **Vector Search Index**, "
+                        f"but the OAuth token passed to the endpoint lacks the required `vector-search` scope.\n\n"
+                        f"**Active Token Scopes:** `{err_str}`\n\n"
+                        f"### 💡 How to Resolve:\n"
+                        f"1. **Workspace OAuth Scopes**: Ensure the application configuration in the workspace allows the `vector-search` scope.\n"
+                        f"2. **Manual Token Override**: Generate a Personal Access Token (PAT) with `all-apis` or `vector-search` scope and use the **Manual Token Override** in the sidebar."
+                    )
+                else:
+                    error_msg = f"**Connection Error:** {err_str}"
+                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                log_audit_request(user_id, role, active_query, "CONNECTION_ERROR", err_str)
+                st.rerun()
