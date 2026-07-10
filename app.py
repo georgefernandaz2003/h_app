@@ -314,9 +314,9 @@ def validate_credentials(email_id, user_id, role):
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
         query = f"""
-            SELECT email, user_id, role 
+            SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE email = '{email_clean}' AND user_id = '{uid_clean}' AND role = '{role_clean}'
+            WHERE LOWER(email) = '{email_clean}' AND user_id = '{uid_clean}' AND LOWER(role) = '{role_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -324,13 +324,18 @@ def validate_credentials(email_id, user_id, role):
             wait_timeout='30s'
         )
         if response.result and response.result.data_array and len(response.result.data_array) > 0:
+            row = response.result.data_array[0]
+            ret_email = row[0]
+            ret_uid = row[1]
+            ret_role = row[2]
+            ret_username = row[3] if len(row) > 3 and row[3] else ret_email.split('@')[0]
             user_info = {
-                "role": role_clean,
-                "name": email_clean.split('@')[0],
-                "id": uid_clean,
-                "patient_id": uid_clean if role_clean == "patient" else None,
-                "email": email_clean,
-                "doctor_id": uid_clean if role_clean == "doctor" else None
+                "role": ret_role.strip().lower(),
+                "name": ret_username.strip(),
+                "id": ret_uid.strip(),
+                "patient_id": ret_uid.strip() if ret_role.strip().lower() == "patient" else None,
+                "email": ret_email.strip(),
+                "doctor_id": ret_uid.strip() if ret_role.strip().lower() == "doctor" else None
             }
             return True, user_info, "Databricks Table Validation"
         return False, "Invalid credentials. User not found in database.", ""
@@ -343,9 +348,9 @@ def get_user_by_email(email_id):
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
         query = f"""
-            SELECT email, user_id, role 
+            SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE email = '{email_clean}'
+            WHERE LOWER(email) = '{email_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -357,9 +362,10 @@ def get_user_by_email(email_id):
             ret_email = row[0]
             ret_uid = row[1]
             ret_role = row[2]
+            ret_username = row[3] if len(row) > 3 and row[3] else ret_email.split('@')[0]
             user_info = {
                 "role": ret_role.strip().lower(),
-                "name": ret_email.split('@')[0],
+                "name": ret_username.strip(),
                 "id": ret_uid.strip(),
                 "patient_id": ret_uid.strip() if ret_role.strip().lower() == "patient" else None,
                 "email": ret_email.strip(),
