@@ -388,13 +388,13 @@ headers_user = get_request_header("X-Forwarded-Preferred-Username")
 
 # ================= SIDEBAR: AUTHENTICATION & SETTINGS =================
 st.sidebar.markdown("### ⚙️ Gateway Settings")
-endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-871d1c5e-endpoint")
+endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-51bfb345-endpoint")
 
 with st.sidebar.expander("🔑 Manual Token Override"):
-    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", ""))
+    host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", "https://dbc-eb4ee151-207c.cloud.databricks.com/"))
     token_override = st.text_input("Personal Access Token", type="password", value=os.environ.get("DATABRICKS_TOKEN", ""))
 
-db_host = host_override if host_override else (default_client.config.host if default_client else os.environ.get("DATABRICKS_HOST", ""))
+db_host = host_override if host_override else (default_client.config.host if default_client and default_client.config.host else os.environ.get("DATABRICKS_HOST", "https://dbc-eb4ee151-207c.cloud.databricks.com/"))
 db_token = (
     token_override if token_override
     else (get_request_header("x-forwarded-access-token") if get_request_header("x-forwarded-access-token")
