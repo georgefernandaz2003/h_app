@@ -316,7 +316,9 @@ def validate_credentials(email_id, user_id, role):
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE LOWER(email) = '{email_clean}' AND user_id = '{uid_clean}' AND LOWER(role) = '{role_clean}'
+            WHERE TRIM(LOWER(email)) = '{email_clean}' 
+              AND TRIM(user_id) = '{uid_clean}' 
+              AND TRIM(LOWER(role)) = '{role_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -350,7 +352,7 @@ def get_user_by_email(email_id):
         query = f"""
             SELECT email, user_id, role, username
             FROM ai.agent.users 
-            WHERE LOWER(email) = '{email_clean}'
+            WHERE TRIM(LOWER(email)) = '{email_clean}'
         """
         response = w.statement_execution.execute_statement(
             warehouse_id=st.session_state.warehouse_id,
@@ -394,12 +396,12 @@ def execute_statement_query(query):
     return []
 
 def get_patients_for_doctor(doctor_id):
-    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE doctor_id = '{doctor_id}' AND role = 'patient'"
+    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE TRIM(LOWER(doctor_id)) = '{doctor_id.strip().lower()}' AND TRIM(LOWER(role)) = 'patient'"
     rows = execute_statement_query(query)
     return [row[0] for row in rows if row and len(row) > 0]
 
 def get_all_patients():
-    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE role = 'patient'"
+    query = "SELECT DISTINCT user_id FROM ai.agent.users WHERE TRIM(LOWER(role)) = 'patient'"
     rows = execute_statement_query(query)
     return [row[0] for row in rows if row and len(row) > 0]
 
