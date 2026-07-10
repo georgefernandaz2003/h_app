@@ -677,30 +677,6 @@ st.caption("Submit queries. The gateway automatically injects row-level filters 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
     
-example_prompts = {
-    "patient": [
-        f"Show my medical history",
-        f"Show clinical details for patient PA002"  # Should fail due to Patient RBAC rules
-    ],
-    "doctor": [
-        "Show my patients",
-        "Show medical history for Patient PA001",
-        "Show medical history for Patient PA002"  # Depends on mapping
-    ],
-    "pharmacist": [
-        "Check medication history for Patient PA001",
-        "Check drug compatibility for Patient PA001"
-    ],
-    "labtechnician": [
-        "List recent lab reports",
-        "Show lab reports for Patient PA001"
-    ],
-    "admin": [
-        "Show doctor-patient mappings",
-        "Show all medical records across all patients"
-    ]
-}
-    
 # Render chat history container
 chat_container = st.container()
 with chat_container:
@@ -710,18 +686,10 @@ with chat_container:
             if "caption" in msg:
                 st.caption(msg["caption"])
                 
-# Render quick examples if history is empty
-clicked_prompt = None
-if not st.session_state.chat_history:
-    st.markdown("**Quick Examples:**")
-    example_cols = st.columns(len(example_prompts[role]))
-    for idx, ex in enumerate(example_prompts[role]):
-        if example_cols[idx].button(ex, key=f"ex_{idx}"):
-            clicked_prompt = ex
 
 # Main chat input at the bottom
 user_query = st.chat_input("Ask the Healthcare Supervisor...")
-active_query = user_query if user_query else clicked_prompt
+active_query = user_query
 
 if active_query:
     # Check if we should use local simulation mode (e.g. running on localhost without tokens)
