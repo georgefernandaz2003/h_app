@@ -18,82 +18,127 @@ st.set_page_config(
 # Custom premium CSS
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
     
-    /* Global styles */
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
+    /* Radial gradient dark background for the application */
+    .stApp {
+        background: radial-gradient(circle at 10% 20%, #151c2c 0%, #0d111d 90%) !important;
+        color: #e2e8f0 !important;
+        font-family: 'Outfit', sans-serif !important;
     }
     
     /* Header styling */
     .main-header {
-        font-size: 2.25rem;
-        font-weight: 700;
+        font-size: 2.5rem;
+        font-weight: 800;
         background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 0.5rem;
+        letter-spacing: -0.025em;
+        text-shadow: 0 0 40px rgba(99, 102, 241, 0.1);
     }
     
     .sub-header {
         font-size: 1.1rem;
         color: #94a3b8;
         margin-bottom: 2rem;
+        font-weight: 400;
     }
     
-    /* Cards and containers */
+    /* Glassmorphism Cards */
     .status-card {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        background: rgba(30, 41, 59, 0.45) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 16px !important;
+        padding: 1.5rem !important;
+        margin-bottom: 1.5rem !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
     
-    .audit-log-container {
-        font-family: 'JetBrains Mono', monospace;
-        background-color: #0f172a;
-        border: 1px solid #1e293b;
-        border-radius: 8px;
-        padding: 1rem;
-        height: 250px;
-        overflow-y: auto;
-        font-size: 0.85rem;
-        color: #38bdf8;
+    .status-card:hover {
+        border-color: rgba(99, 102, 241, 0.3) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 12px 40px 0 rgba(99, 102, 241, 0.1) !important;
     }
     
-    /* Badge styling */
+    /* Sidebar premium layout */
+    [data-testid="stSidebar"] {
+        background-color: #0b0f19 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+    }
+    
+    /* Custom input field adjustments */
+    div[data-baseweb="input"] {
+        background-color: rgba(15, 23, 42, 0.5) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 10px !important;
+        transition: all 0.2s ease !important;
+    }
+    div[data-baseweb="input"]:focus-within {
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
+    }
+    
+    /* Premium button overrides */
+    .stButton>button {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.65rem 1.4rem !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.01em !important;
+        box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.3) !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 6px 20px 0 rgba(99, 102, 241, 0.4) !important;
+        background: linear-gradient(135deg, #5a52e6 0%, #8b4eeb 100%) !important;
+    }
+    
+    .stButton>button:active {
+        transform: translateY(1px) !important;
+    }
+    
+    /* Collapsible Expander styling */
+    .streamlit-expanderHeader {
+        background-color: rgba(30, 41, 59, 0.3) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        border-radius: 10px !important;
+        padding: 0.75rem 1.25rem !important;
+        font-weight: 600 !important;
+        color: #f1f5f9 !important;
+        transition: all 0.2s ease !important;
+    }
+    .streamlit-expanderHeader:hover {
+        background-color: rgba(99, 102, 241, 0.1) !important;
+        border-color: rgba(99, 102, 241, 0.3) !important;
+        color: #fff !important;
+    }
+    
+    /* Badges */
     .badge {
         display: inline-block;
-        padding: 0.25rem 0.6rem;
+        padding: 0.3rem 0.75rem;
         font-size: 0.75rem;
         font-weight: 600;
-        border-radius: 9999px;
+        border-radius: 8px;
         text-transform: uppercase;
         letter-spacing: 0.05em;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
     
-    .badge-patient { background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; }
-    .badge-doctor { background-color: #064e3b; color: #34d399; border: 1px solid #10b981; }
-    .badge-pharmacist { background-color: #1e1b4b; color: #a5b4fc; border: 1px solid #6366f1; }
-    .badge-labtechnician { background-color: #701a75; color: #f472b6; border: 1px solid #ec4899; }
-    .badge-admin { background-color: #7c2d12; color: #fb923c; border: 1px solid #f97316; }
-    
-    /* Buttons */
-    .stButton>button {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-        color: white;
-        border: none;
-        padding: 0.6rem 1.2rem;
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.2s ease;
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 15px -3px rgba(124, 58, 237, 0.3);
-    }
+    .badge-patient { background: rgba(59, 130, 246, 0.15) !important; color: #60a5fa !important; border: 1px solid rgba(59, 130, 246, 0.3) !important; }
+    .badge-doctor { background: rgba(16, 185, 129, 0.15) !important; color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3) !important; }
+    .badge-pharmacist { background: rgba(99, 102, 241, 0.15) !important; color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3) !important; }
+    .badge-labtechnician { background: rgba(236, 72, 153, 0.15) !important; color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.3) !important; }
+    .badge-admin { background: rgba(249, 115, 22, 0.15) !important; color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3) !important; }
 </style>
 """, unsafe_allow_html=True)
 
