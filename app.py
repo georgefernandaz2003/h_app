@@ -496,38 +496,14 @@ if st.session_state.authenticated:
     if st.sidebar.button("🧹 Clear Chat History", use_container_width=True):
         st.session_state.chat_history = []
         st.rerun()
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🛡️ Active Session Context")
     patient_id = ""
     doctor_id = ""
     if role == "patient":
         patient_id = user_id
-        st.sidebar.info(f"🔒 Row-level security matches ONLY patient_id = `{patient_id}`.")
     elif role == "doctor":
         doctor_id = user_id
         assigned = get_patients_for_doctor(doctor_id)
-        if assigned:
-            mapping_df = pd.DataFrame({"Doctor ID": [doctor_id] * len(assigned), "Assigned Patient ID": assigned})
-            with st.sidebar.expander("📋 Active Doctor-Patient Mapping", expanded=False):
-                st.table(mapping_df)
-            patient_id = st.sidebar.selectbox("Select Patient to Query", assigned, key="doctor_patient_select")
-            st.sidebar.success(f"Verified Assigned Patients: {', '.join(assigned)}")
-        else:
-            st.sidebar.warning("No patients assigned to you in the database.")
-    elif role == "pharmacist":
-        st.sidebar.info("💊 Pharmacist: Reviewing medical and prescription records compatibility.")
-        patients = [""] + get_all_patients()
-        patient_id = st.sidebar.selectbox("Select Patient Context", patients, index=0, key="pharmacist_patient_select")
-    elif role == "labtechnician":
-        st.sidebar.info("🔬 Lab Technician: Restricting queries to laboratory test records.")
-        patients = [""] + get_all_patients()
-        patient_id = st.sidebar.selectbox("Select Patient Context", patients, index=0, key="labtech_patient_select")
-    elif role == "admin":
-        st.sidebar.warning("⚡ Admin has unrestricted access.")
-        patients = [""] + get_all_patients()
-        doctors = [""] + get_all_doctors()
-        patient_id = st.sidebar.selectbox("Simulate Patient Context", patients, index=0, key="admin_patient_select")
-        doctor_id = st.sidebar.selectbox("Simulate Doctor Context", doctors, index=0, key="admin_doctor_select")
+        patient_id = assigned[0] if assigned else ""
 
 # App Header
 st.markdown('<div class="main-header">Healthcare Portal - Supervisor Agent Gateway</div>', unsafe_allow_html=True)
