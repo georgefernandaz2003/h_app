@@ -773,65 +773,65 @@ with col1:
                     st.rerun()
 
 with col2:
-    st.markdown("### 🛡️ Active Security Policy")
-    st.caption("How the Supervisor enforces HIPAA & row-level filtering:")
-    
-    # Render rules based on role
-    if role == "patient":
-        st.markdown(f"""
-        <div class="status-card">
-            <h5 style="color: #60a5fa; margin-top:0;">Patient Policy Rules</h5>
-            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
-                <li>Allows reading ONLY patient's own records (<code>patient_id == "{patient_id}"</code>)</li>
-                <li>Denies and reports access requests for all other identifiers</li>
-                <li>Hides columns / metadata of unrelated patients</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    elif role == "doctor":
-        st.markdown(f"""
-        <div class="status-card">
-            <h5 style="color: #34d399; margin-top:0;">Doctor Policy Rules</h5>
-            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
-                <li>Checks mappings for <code>doctor_id == "{doctor_id}"</code></li>
-                <li>Denies access if requested patient is not mapped to doctor</li>
-                <li>Limits query response strictly to matching rows</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    elif role == "pharmacist":
-        st.markdown(f"""
-        <div class="status-card">
-            <h5 style="color: #a5b4fc; margin-top:0;">Pharmacist Policy Rules</h5>
-            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
-                <li>Allows viewing medical histories and prescriptions to review compatibility</li>
-                <li>Restricts editing of medical records or billing profiles</li>
-                <li>Audit logged under pharmacist credentials</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    elif role == "labtechnician":
-        st.markdown(f"""
-        <div class="status-card">
-            <h5 style="color: #f472b6; margin-top:0;">Lab Technician Policy Rules</h5>
-            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
-                <li>Allows viewing lab test reports ONLY</li>
-                <li>Removes diagnosis notes, clinical consult logs, and doctor summaries</li>
-                <li>Redacts sensitive identifiers</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    elif role == "admin":
-        st.markdown(f"""
-        <div class="status-card">
-            <h5 style="color: #fb923c; margin-top:0;">Admin Policy Rules</h5>
-            <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
-                <li>Allows full database reads and administrative actions</li>
-                <li>Enables schema and policy configuration commands</li>
-                <li>Maintains full audit trails of administrative reads</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
+    with st.expander("🛡️ Active Security Policy", expanded=False):
+        st.caption("How the Supervisor enforces HIPAA & row-level filtering:")
+        
+        # Render rules based on role
+        if role == "patient":
+            st.markdown(f"""
+            <div class="status-card">
+                <h5 style="color: #60a5fa; margin-top:0;">Patient Policy Rules</h5>
+                <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                    <li>Allows reading ONLY patient's own records (<code>patient_id == "{patient_id}"</code>)</li>
+                    <li>Denies and reports access requests for all other identifiers</li>
+                    <li>Hides columns / metadata of unrelated patients</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        elif role == "doctor":
+            st.markdown(f"""
+            <div class="status-card">
+                <h5 style="color: #34d399; margin-top:0;">Doctor Policy Rules</h5>
+                <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                    <li>Checks mappings for <code>doctor_id == "{doctor_id}"</code></li>
+                    <li>Denies access if requested patient is not mapped to doctor</li>
+                    <li>Limits query response strictly to matching rows</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        elif role == "pharmacist":
+            st.markdown(f"""
+            <div class="status-card">
+                <h5 style="color: #a5b4fc; margin-top:0;">Pharmacist Policy Rules</h5>
+                <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                    <li>Allows viewing medical histories and prescriptions to review compatibility</li>
+                    <li>Restricts editing of medical records or billing profiles</li>
+                    <li>Audit logged under pharmacist credentials</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        elif role == "labtechnician":
+            st.markdown(f"""
+            <div class="status-card">
+                <h5 style="color: #f472b6; margin-top:0;">Lab Technician Policy Rules</h5>
+                <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                    <li>Allows viewing lab test reports ONLY</li>
+                    <li>Removes diagnosis notes, clinical consult logs, and doctor summaries</li>
+                    <li>Redacts sensitive identifiers</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        elif role == "admin":
+            st.markdown(f"""
+            <div class="status-card">
+                <h5 style="color: #fb923c; margin-top:0;">Admin Policy Rules</h5>
+                <ul style="padding-left: 20px; font-size:0.9rem; color:#cbd5e1;">
+                    <li>Allows full database reads and administrative actions</li>
+                    <li>Enables schema and policy configuration commands</li>
+                    <li>Maintains full audit trails of administrative reads</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
         
     # Show outbound payload simulation
     with st.expander("🔍 Inspect Security Token Payload"):
