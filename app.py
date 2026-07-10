@@ -541,9 +541,9 @@ if not st.session_state.authenticated:
     """, unsafe_allow_html=True)
     login_tab1, login_tab2 = st.tabs(["👤 Manual Sign-In", "🌐 Databricks SSO"])
     with login_tab1:
-        login_email = st.text_input("Enter Your Email ID", placeholder="e.g. dr.smith@hospital.com", key="login_email_input")
-        login_id = st.text_input("Enter Your User ID", placeholder="e.g. D001, PA001, U001", key="login_id_input")
-        login_role = st.text_input("Enter Your Role", placeholder="e.g. doctor, patient, admin, pharmacist, labtechnician", key="login_role_input")
+        login_email = st.text_input("Enter Your Email ID", key="login_email_input")
+        login_id = st.text_input("Enter Your User ID", key="login_id_input")
+        login_role = st.text_input("Enter Your Role", key="login_role_input")
         if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
             if not login_email or not login_id or not login_role:
                 st.error("❌ Please enter Email ID, User ID, and Role.")
