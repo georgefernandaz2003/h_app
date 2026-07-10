@@ -684,6 +684,12 @@ with col1:
                     "role": role,
                     "patient_id": patient_id,
                     "doctor_id": doctor_id,
+                    "user_context": {
+                        "user_id": user_id,
+                        "role": role,
+                        "patient_id": patient_id,
+                        "doctor_id": doctor_id
+                    },
                     "custom_inputs": {
                         "user_id": user_id,
                         "role": role,
