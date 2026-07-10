@@ -301,76 +301,71 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 
 
-# Hardcoded local user database
-HARDCODED_USERS = {
-    "D001": {
-        "role": "doctor",
-        "name": "Dr. Smith",
-        "id": "D001",
-        "patient_id": None,
-        "email": "dr.smith@hospital.com",
-        "doctor_id": "D001"
-    },
-    "D002": {
-        "role": "doctor",
-        "name": "Dr. Jones",
-        "id": "D002",
-        "patient_id": None,
-        "email": "dr.jones@hospital.com",
-        "doctor_id": "D002"
-    },
-    "P001": {
-        "role": "pharmacist",
-        "name": "Pharm. Doe",
-        "id": "P001",
-        "patient_id": None,
-        "email": "pharm.doe@hospital.com",
-        "doctor_id": None
-    },
-    "A001": {
-        "role": "admin",
-        "name": "Admin User",
-        "id": "A001",
-        "patient_id": None,
-        "email": "admin@hospital.com",
-        "doctor_id": None
-    },
-    "L001": {
-        "role": "labtechnician",
-        "name": "Lab Tech 1",
-        "id": "L001",
-        "patient_id": None,
-        "email": "lab.tech1@hospital.com",
-        "doctor_id": None
-    },
-    "PA001": {
-        "role": "patient",
-        "name": "Patient 001",
-        "id": "PA001",
-        "patient_id": None,
-        "email": "patient001@hospital.com",
-        "doctor_id": "D001"
-    },
-    "U001": {
-        "role": "admin",
-        "name": "jeevanmg958",
-        "id": "U001",
-        "patient_id": None,
-        "email": "jeevanmg958@gmail.com",
-        "doctor_id": None
-    }
-}
+# Credentials & Role Validation Functions (Database Validation Only)
+def validate_credentials(email_id, user_id, role):
+    email_clean = email_id.strip().lower()
+    uid_clean = user_id.strip()
+    role_clean = role.strip().lower()
+    
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        query = f"""
+            SELECT email, user_id, role 
+            FROM ai.agent.users 
+            WHERE email = '{email_clean}' AND user_id = '{uid_clean}' AND role = '{role_clean}'
+        """
+        response = w.statement_execution.execute_statement(
+            warehouse_id='6515b73354b42366',
+            statement=query,
+            wait_timeout='30s'
+        )
+        if response.result and response.result.data_array and len(response.result.data_array) > 0:
+            user_info = {
+                "role": role_clean,
+                "name": email_clean.split('@')[0],
+                "id": uid_clean,
+                "patient_id": uid_clean if role_clean == "patient" else None,
+                "email": email_clean,
+                "doctor_id": uid_clean if role_clean == "doctor" else None
+            }
+            return True, user_info, "Databricks Table Validation"
+        return False, "Invalid credentials. User not found in database.", ""
+    except Exception as e:
+        return False, f"Databricks table query error: {str(e)}", ""
 
-# Credentials & Role Validation Function (Local Hardcoded DB)
-def validate_credentials(login_role, login_id):
-    uid_clean = login_id.strip()
-    if uid_clean in HARDCODED_USERS:
-        user_info = HARDCODED_USERS[uid_clean]
-        db_role = user_info.get("role", "").lower().strip()
-        if db_role != login_role.lower().strip():
-            return False, f"Role mismatch: User `{uid_clean}` is registered locally as `{db_role.upper()}`, not `{login_role.upper()}`.", ""
-        return True, user_info, "Local Hardcoded Database"
-    return False, f"User ID `{login_id}` not found in local database.", ""
+def get_user_by_email(email_id):
+    email_clean = email_id.strip().lower()
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        query = f"""
+            SELECT email, user_id, role 
+            FROM ai.agent.users 
+            WHERE email = '{email_clean}'
+        """
+        response = w.statement_execution.execute_statement(
+            warehouse_id='6515b73354b42366',
+            statement=query,
+            wait_timeout='30s'
+        )
+        if response.result and response.result.data_array and len(response.result.data_array) > 0:
+            row = response.result.data_array[0]
+            ret_email = row[0]
+            ret_uid = row[1]
+            ret_role = row[2]
+            user_info = {
+                "role": ret_role.strip().lower(),
+                "name": ret_email.split('@')[0],
+                "id": ret_uid.strip(),
+                "patient_id": ret_uid.strip() if ret_role.strip().lower() == "patient" else None,
+                "email": ret_email.strip(),
+                "doctor_id": ret_uid.strip() if ret_role.strip().lower() == "doctor" else None
+            }
+            return True, user_info
+        return False, "User email not found in database."
+    except Exception as e:
+        return False, f"Database error: {str(e)}"
 
 # Initialize Session State
 if "audit_logs" not in st.session_state:
@@ -380,8 +375,6 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "logged_out" not in st.session_state:
     st.session_state.logged_out = False
-if "users_directory" not in st.session_state or not st.session_state.users_directory:
-    st.session_state.users_directory = HARDCODED_USERS.copy()
 
 headers_email = get_request_header("X-Forwarded-Email")
 headers_user = get_request_header("X-Forwarded-Preferred-Username")
@@ -403,10 +396,6 @@ db_token = (
 
 if db_host and not db_host.startswith(("http://", "https://")):
     db_host = f"https://{db_host}"
-
-
-
-USERS_BY_ID = st.session_state.users_directory
 
 if st.session_state.authenticated:
     st.sidebar.markdown("---")
@@ -491,14 +480,15 @@ if not st.session_state.authenticated:
     """, unsafe_allow_html=True)
     login_tab1, login_tab2 = st.tabs(["👤 Manual Sign-In", "🌐 Databricks SSO"])
     with login_tab1:
-        login_role = st.text_input("Enter Your Role", placeholder="e.g. doctor, patient, admin, pharmacist, labtechnician", key="login_role_input")
+        login_email = st.text_input("Enter Your Email ID", placeholder="e.g. dr.smith@hospital.com", key="login_email_input")
         login_id = st.text_input("Enter Your User ID", placeholder="e.g. D001, PA001, U001", key="login_id_input")
+        login_role = st.text_input("Enter Your Role", placeholder="e.g. doctor, patient, admin, pharmacist, labtechnician", key="login_role_input")
         if st.button("Sign In to Portal", use_container_width=True, key="btn_manual_login"):
-            if not login_role or not login_id:
-                st.error("❌ Please enter both Role and User ID.")
+            if not login_email or not login_id or not login_role:
+                st.error("❌ Please enter Email ID, User ID, and Role.")
             else:
                 with st.spinner("Validating credentials..."):
-                    success, result, source = validate_credentials(login_role.strip().lower(), login_id.strip())
+                    success, result, source = validate_credentials(login_email.strip(), login_id.strip(), login_role.strip())
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.user_role = login_role.strip().lower()
@@ -514,29 +504,24 @@ if not st.session_state.authenticated:
                         log_audit_request(login_id.strip(), login_role.strip().lower(), "User Sign-In", "FAILED", result)
     with login_tab2:
         if headers_email or headers_user:
-            st.write(f"Detected SSO User: **{headers_email or headers_user}**")
-            email_key = (headers_email or headers_user).lower().strip()
-            matched_user = None
-            scan_users = USERS_BY_ID
-            for u in scan_users.values():
-                if u["email"].lower() == email_key:
-                    matched_user = u
-                    break
-            
-            if matched_user:
-                st.write(f"Mapped Profile: **{matched_user['name']}** ({matched_user['role'].upper()})")
-                if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
-                    st.session_state.authenticated = True
-                    st.session_state.user_role = matched_user["role"]
-                    st.session_state.user_id = matched_user["id"]
-                    st.session_state.user_info = matched_user
-                    st.session_state.auth_source = "Databricks SSO"
-                    st.session_state.logged_out = False
-                    log_audit_request(matched_user["id"], matched_user["role"], "User SSO Sign-In", "SUCCESS", f"SSO logged in via header email: {headers_email}")
-                    st.success("SSO Sign-in Successful!")
-                    st.rerun()
-            else:
-                st.warning("Your SSO email is not mapped in the portal directory. Please sign in manually.")
+            sso_email = (headers_email or headers_user).lower().strip()
+            st.write(f"Detected SSO User: **{sso_email}**")
+            if st.button("Sign In with SSO", use_container_width=True, key="btn_sso_login"):
+                with st.spinner("Validating SSO credentials..."):
+                    success, result = get_user_by_email(sso_email)
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.user_role = result["role"]
+                        st.session_state.user_id = result["id"]
+                        st.session_state.user_info = result
+                        st.session_state.auth_source = "Databricks SSO"
+                        st.session_state.logged_out = False
+                        log_audit_request(result["id"], result["role"], "User SSO Sign-In", "SUCCESS", f"SSO logged in via email: {sso_email}")
+                        st.success("SSO Sign-in Successful!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ SSO Login Failed: {result}")
+                        log_audit_request(sso_email, "unknown", "User SSO Sign-In", "FAILED", result)
         else:
             st.info("No SSO headers detected. Please sign in manually via the Select Identity tab.")
     st.markdown("</div>", unsafe_allow_html=True)
