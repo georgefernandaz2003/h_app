@@ -684,12 +684,6 @@ with col1:
                     "role": role,
                     "patient_id": patient_id,
                     "doctor_id": doctor_id,
-                    "user_context": {
-                        "user_id": user_id,
-                        "role": role,
-                        "patient_id": patient_id,
-                        "doctor_id": doctor_id
-                    },
                     "custom_inputs": {
                         "user_id": user_id,
                         "role": role,
@@ -856,21 +850,4 @@ with col2:
         }
         st.json(simulated_token_claims)
 
-# ================= BOTTOM PANEL: HIPAA AUDIT LOGS =================
-st.markdown("---")
-st.markdown("### 📋 HIPAA Access & Audit Compliance Logs")
-st.caption("All queries, context payloads, and authorization outcomes are logged in real-time.")
 
-# Format audit logs as markdown table or raw logs
-if st.session_state.audit_logs:
-    log_text = ""
-    for log in st.session_state.audit_logs:
-        badge_style = "color:#10b981;" if "SUCCESS" in log["status"] else "color:#ef4444;" if "FAILED" in log["status"] else "color:#eab308;"
-        log_text += f"[{log['timestamp']}] [USER: {log['user_id']} ({log['role'].upper()})] \n"
-        log_text += f"  👉 Request: \"{log['query']}\"\n"
-        log_text += f"  🟢 Outcome: {log['status']} | {log['details']}\n"
-        log_text += "-"*80 + "\n"
-    
-    st.markdown(f'<pre class="audit-log-container">{log_text}</pre>', unsafe_allow_html=True)
-else:
-    st.info("No audit logs generated yet.")
