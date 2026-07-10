@@ -302,6 +302,9 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 
 # Credentials & Role Validation Functions (Database Validation Only)
+if "warehouse_id" not in st.session_state:
+    st.session_state.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "dfbcf4b12381c175")
+
 def validate_credentials(email_id, user_id, role):
     email_clean = email_id.strip().lower()
     uid_clean = user_id.strip()
@@ -316,7 +319,7 @@ def validate_credentials(email_id, user_id, role):
             WHERE email = '{email_clean}' AND user_id = '{uid_clean}' AND role = '{role_clean}'
         """
         response = w.statement_execution.execute_statement(
-            warehouse_id='6515b73354b42366',
+            warehouse_id=st.session_state.warehouse_id,
             statement=query,
             wait_timeout='30s'
         )
@@ -345,7 +348,7 @@ def get_user_by_email(email_id):
             WHERE email = '{email_clean}'
         """
         response = w.statement_execution.execute_statement(
-            warehouse_id='6515b73354b42366',
+            warehouse_id=st.session_state.warehouse_id,
             statement=query,
             wait_timeout='30s'
         )
@@ -373,7 +376,7 @@ def execute_statement_query(query):
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
         response = w.statement_execution.execute_statement(
-            warehouse_id='6515b73354b42366',
+            warehouse_id=st.session_state.warehouse_id,
             statement=query,
             wait_timeout='30s'
         )
@@ -414,6 +417,7 @@ headers_user = get_request_header("X-Forwarded-Preferred-Username")
 # ================= SIDEBAR: AUTHENTICATION & SETTINGS =================
 st.sidebar.markdown("### ⚙️ Gateway Settings")
 endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-51bfb345-endpoint")
+st.session_state.warehouse_id = st.sidebar.text_input("SQL Warehouse ID", value=st.session_state.warehouse_id)
 
 with st.sidebar.expander("🔑 Manual Token Override"):
     host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", "https://dbc-eb4ee151-207c.cloud.databricks.com/"))
