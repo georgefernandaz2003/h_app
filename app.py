@@ -97,6 +97,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Input validation helper to prevent SQL injection
+def sanitize_input(input_str, max_length=100):
+    """Basic input sanitization - removes SQL injection characters"""
+    if not input_str:
+        return ""
+    # Remove dangerous SQL characters
+    dangerous_chars = ["'", '"', ';', '--', '/*', '*/', 'DROP', 'DELETE', 'UPDATE', 'INSERT', 'UNION']
+    cleaned = str(input_str).strip()[:max_length]
+    for char in dangerous_chars:
+        if char in cleaned.upper():
+            raise ValueError(f"Invalid input: contains prohibited character/keyword: {char}")
+    return cleaned
+
 # Helper function to write audit logs
 def log_audit_request(user_id, role, query, status, details=""):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -302,58 +315,59 @@ def get_mock_agent_response(query, role, patient_id, doctor_id):
 
 
 # Credentials & Role Validation Functions (Database Validation Only)
-if "warehouse_id" not in st.session_state:
-    st.session_state.warehouse_id = os.environ.get("SQL_WAREHOUSE_ID", "6515b73354b42366")
-
 def validate_credentials(email_id, user_id, role):
-    email_clean = email_id.strip()
-    uid_clean = user_id.strip()
-    role_clean = role.strip()
+    try:
+        # Sanitize inputs to prevent SQL injection
+        email_clean = sanitize_input(email_id, max_length=100).lower()
+        uid_clean = sanitize_input(user_id, max_length=50)
+        role_clean = sanitize_input(role, max_length=50).lower()
+    except ValueError as ve:
+        return False, f"Invalid input: {str(ve)}", ""
     
     try:
         from databricks.sdk import WorkspaceClient
-        w = get_db_client(db_host, db_token) or WorkspaceClient()
+        w = WorkspaceClient()
         query = f"""
-            SELECT email, user_id, role, username
+            SELECT email, user_id, role 
             FROM ai.agent.users 
-            WHERE email = '{email_clean}' AND user_id = '{uid_clean}' AND role = '{role_clean}'
+            WHERE LOWER(email) = '{email_clean}' AND user_id = '{uid_clean}' AND LOWER(role) = '{role_clean}'
         """
         response = w.statement_execution.execute_statement(
-            warehouse_id=st.session_state.warehouse_id,
+            warehouse_id='6515b73354b42366',
             statement=query,
             wait_timeout='30s'
         )
         if response.result and response.result.data_array and len(response.result.data_array) > 0:
-            row = response.result.data_array[0]
-            ret_email = row[0]
-            ret_uid = row[1]
-            ret_role = row[2]
-            ret_username = row[3] if len(row) > 3 and row[3] else ret_email.split('@')[0]
             user_info = {
-                "role": ret_role.strip().lower(),
-                "name": ret_username.strip(),
-                "id": ret_uid.strip(),
-                "patient_id": ret_uid.strip() if ret_role.strip().lower() == "patient" else None,
-                "email": ret_email.strip(),
-                "doctor_id": ret_uid.strip() if ret_role.strip().lower() == "doctor" else None
+                "role": role_clean,
+                "name": email_clean.split('@')[0],
+                "id": uid_clean,
+                "patient_id": uid_clean if role_clean == "patient" else None,
+                "email": email_clean,
+                "doctor_id": uid_clean if role_clean == "doctor" else None
             }
             return True, user_info, "Databricks Table Validation"
-        return False, "Invalid credentials. User not found in database.", ""
+        return False, f"Invalid credentials. User not found in database.{response}", ""
     except Exception as e:
         return False, f"Databricks table query error: {str(e)}", ""
 
 def get_user_by_email(email_id):
-    email_clean = email_id.strip()
+    try:
+        # Sanitize email input
+        email_clean = sanitize_input(email_id, max_length=100).lower()
+    except ValueError as ve:
+        return False, f"Invalid input: {str(ve)}"
+    
     try:
         from databricks.sdk import WorkspaceClient
-        w = get_db_client(db_host, db_token) or WorkspaceClient()
+        w = WorkspaceClient()
         query = f"""
-            SELECT email, user_id, role, username
+            SELECT email, user_id, role 
             FROM ai.agent.users 
-            WHERE email = '{email_clean}'
+            WHERE LOWER(email) = '{email_clean}'
         """
         response = w.statement_execution.execute_statement(
-            warehouse_id=st.session_state.warehouse_id,
+            warehouse_id='6515b73354b42366',
             statement=query,
             wait_timeout='30s'
         )
@@ -362,10 +376,9 @@ def get_user_by_email(email_id):
             ret_email = row[0]
             ret_uid = row[1]
             ret_role = row[2]
-            ret_username = row[3] if len(row) > 3 and row[3] else ret_email.split('@')[0]
             user_info = {
                 "role": ret_role.strip().lower(),
-                "name": ret_username.strip(),
+                "name": ret_email.split('@')[0],
                 "id": ret_uid.strip(),
                 "patient_id": ret_uid.strip() if ret_role.strip().lower() == "patient" else None,
                 "email": ret_email.strip(),
@@ -380,9 +393,9 @@ def get_user_by_email(email_id):
 def execute_statement_query(query):
     try:
         from databricks.sdk import WorkspaceClient
-        w = get_db_client(db_host, db_token) or WorkspaceClient()
+        w = WorkspaceClient()
         response = w.statement_execution.execute_statement(
-            warehouse_id=st.session_state.warehouse_id,
+            warehouse_id='6515b73354b42366',
             statement=query,
             wait_timeout='30s'
         )
@@ -394,7 +407,8 @@ def execute_statement_query(query):
     return []
 
 def get_patients_for_doctor(doctor_id):
-    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE doctor_id = '{doctor_id}' AND role = 'patient'"
+    # Note: Using patient_id column to store assigned doctor's ID
+    query = f"SELECT DISTINCT user_id FROM ai.agent.users WHERE patient_id = '{doctor_id}' AND LOWER(role) = 'patient'"
     rows = execute_statement_query(query)
     return [row[0] for row in rows if row and len(row) > 0]
 
@@ -423,7 +437,6 @@ headers_user = get_request_header("X-Forwarded-Preferred-Username")
 # ================= SIDEBAR: AUTHENTICATION & SETTINGS =================
 st.sidebar.markdown("### ⚙️ Gateway Settings")
 endpoint_name = st.sidebar.text_input("Databricks Serving Endpoint", value="mas-51bfb345-endpoint")
-st.session_state.warehouse_id = st.sidebar.text_input("SQL Warehouse ID", value=st.session_state.warehouse_id)
 
 with st.sidebar.expander("🔑 Manual Token Override"):
     host_override = st.text_input("Databricks Host URL", value=os.environ.get("DATABRICKS_HOST", "https://dbc-eb4ee151-207c.cloud.databricks.com/"))
